@@ -391,12 +391,12 @@ local M = {
           body: (literal_value
             (keyed_element
               (literal_element
-                (interpreted_string_literal) @test.name
+                (interpreted_string_literal) @test.map.key
               )
               (literal_element
                 (literal_value) @test.definition
               )
-            )
+            ) @test.map.element
           )
         )
       )
@@ -566,6 +566,8 @@ function M.get_table_test_name(bufnr, cursor_pos)
 
   local test_definitions = {}
   local test_names = {}
+  local map_keys = {}
+  local map_elements = {}
 
   -- Collect all test definitions and their associated names
   for id, node in query:iter_captures(root, bufnr, 0, -1) do
@@ -583,22 +585,67 @@ function M.get_table_test_name(bufnr, cursor_pos)
       table.insert(test_names, {
         name = test_name,
         start_row = start_row,
+        end_row = end_row,
+        type = "struct_field"
+      })
+    elseif name == "test.map.key" then
+      local test_name = vim.treesitter.get_node_text(node, bufnr)
+      local start_row, _, end_row, _ = node:range()
+      table.insert(map_keys, {
+        name = test_name,
+        start_row = start_row,
+        end_row = end_row,
+        type = "map_key"
+      })
+    elseif name == "test.map.element" then
+      local start_row, _, end_row, _ = node:range()
+      table.insert(map_elements, {
+        node = node,
+        start_row = start_row,
         end_row = end_row
       })
     end
   end
 
-  -- First, try to find if cursor is directly on a test name
+  -- Combine map keys and struct field names, prioritizing map keys
+  local all_test_names = {}
+  for _, map_key in ipairs(map_keys) do
+    table.insert(all_test_names, map_key)
+  end
   for _, test_name in ipairs(test_names) do
+    table.insert(all_test_names, test_name)
+  end
+
+  -- First, check if we're in a map-based test context
+  local is_in_map_context = false
+  for _, map_element in ipairs(map_elements) do
+    if curr_row >= map_element.start_row and curr_row <= map_element.end_row then
+      is_in_map_context = true
+      -- Find the map key within this map element
+      for _, map_key in ipairs(map_keys) do
+        if map_key.start_row >= map_element.start_row and map_key.end_row <= map_element.end_row then
+          return map_key.name
+        end
+      end
+    end
+  end
+
+  -- If in map context, don't check struct name fields (they're just data)
+  if is_in_map_context then
+    return nil
+  end
+
+  -- Direct match on test names (for non-map contexts)
+  for _, test_name in ipairs(all_test_names) do
     if curr_row >= test_name.start_row and curr_row <= test_name.end_row then
       return test_name.name
     end
   end
 
-  -- If not directly on a name, check if cursor is within any test definition
+  -- Check if cursor is within any test definition (for traditional table tests)
   for _, test_def in ipairs(test_definitions) do
     if curr_row >= test_def.start_row and curr_row <= test_def.end_row then
-      -- Find the test name within this definition
+      -- Find struct name fields (for traditional table tests only)
       for _, test_name in ipairs(test_names) do
         if test_name.start_row >= test_def.start_row and test_name.end_row <= test_def.end_row then
           return test_name.name

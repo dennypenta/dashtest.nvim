@@ -2,13 +2,12 @@ package abc_test
 
 import (
 	"fmt"
+	"gotest/abc"
 	"math"
 	"os"
 	"strconv"
 	"testing"
 	"time"
-
-	"gotest/abc"
 )
 
 func TestSum(t *testing.T) {
@@ -74,5 +73,60 @@ func TestSum2(t *testing.T) {
 func TestIntensiveOutput(t *testing.T) {
 	for i := range 10000 {
 		fmt.Println("hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!hi!" + strconv.Itoa(i))
+	}
+}
+
+func TestTableDrivenTyped(t *testing.T) {
+	type testCase struct {
+		name string
+	}
+
+	for _, tt := range []testCase{
+		{
+			name: "json",
+		},
+		{
+			name: "yaml",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fmt.Println(tt.name)
+		})
+	}
+}
+
+func TestTableDrivenInlined(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+	}{
+		{
+			name: "json",
+		},
+		{
+			name: "yaml",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fmt.Println(tt.name)
+		})
+	}
+}
+
+func TestTableDrivenMap(t *testing.T) {
+	type testCase struct {
+		name string
+	}
+
+	for name, tt := range map[string]testCase{
+		"json": {
+			name: "not a name",
+		},
+		"yaml": {
+			name: "not a name either",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fmt.Println(tt.name)
+		})
 	}
 }
