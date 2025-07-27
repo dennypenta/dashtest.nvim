@@ -152,11 +152,16 @@ end
 M.build_line_run_params = function(bufnr, cursor_pos, opts)
   local func_names = ts.get_nearest_func_names(bufnr, cursor_pos)
   local sub_name = ts.get_sub_testcase_name(bufnr, cursor_pos)
+  local table_test_name = ts.get_table_test_name(bufnr, cursor_pos)
+  
   --- @type string[]
   local sub_func_names = {}
   if sub_name then
     sub_func_names = { sub_name }
+  elseif table_test_name then
+    sub_func_names = { table_test_name }
   end
+  
   local cwd = M.get_cwd(bufnr)
   local module = get_module_path(cwd, bufnr) or "."
 
