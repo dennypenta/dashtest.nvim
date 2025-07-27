@@ -95,6 +95,28 @@ func TestTableDrivenTyped(t *testing.T) {
 	}
 }
 
+func TestTableDrivenTypedDifferentNameField(t *testing.T) {
+	type testCase struct {
+		name     string
+		realName string
+	}
+
+	for _, tt := range []testCase{
+		{
+			name:     "json",
+			realName: "also json",
+		},
+		{
+			name:     "yaml",
+			realName: "also yaml",
+		},
+	} {
+		t.Run(tt.realName, func(t *testing.T) {
+			fmt.Println(tt.name)
+		})
+	}
+}
+
 func TestTableDrivenInlined(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -112,7 +134,27 @@ func TestTableDrivenInlined(t *testing.T) {
 	}
 }
 
-func TestTableDrivenMap(t *testing.T) {
+func TestTableDrivenInlinedDifferentName(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		realName string
+	}{
+		{
+			name:     "json",
+			realName: "also json",
+		},
+		{
+			name:     "yaml",
+			realName: "also yaml",
+		},
+	} {
+		t.Run(tt.realName, func(t *testing.T) {
+			fmt.Println(tt.name)
+		})
+	}
+}
+
+func TestTableDrivenMapKeyIsName(t *testing.T) {
 	type testCase struct {
 		name string
 	}
@@ -126,6 +168,26 @@ func TestTableDrivenMap(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			fmt.Println(tt.name)
+		})
+	}
+}
+
+func TestTableDrivenMap(t *testing.T) {
+	type testCase struct {
+		name string
+	}
+
+	for name, tt := range map[string]testCase{
+		"json": {
+			name: "real name json",
+		},
+		"yaml": {
+			name: "real name yaml",
+		},
+	} {
+		_ = name
+		t.Run(tt.name, func(t *testing.T) {
 			fmt.Println(tt.name)
 		})
 	}

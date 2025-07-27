@@ -303,8 +303,6 @@ local M = {
     )
   ]],
 
-
-
   -- Map-based table tests where test name is the map key
   table_tests_map_key = [[
     ;; query for map-based table tests with string keys
@@ -340,6 +338,60 @@ local M = {
             )
             arguments: (argument_list
               (identifier) @test.key.name1 (#eq? @test.key.name @test.key.name1)
+            )
+          )
+        )
+      )
+    )
+  ]],
+
+  -- Map-based table tests where test name is a struct field (like tt.name)
+  table_tests_map_field = [[
+    ;; query for map-based table tests using struct field as test name
+    (for_statement
+      (range_clause
+        left: (expression_list
+          (identifier) @test.key.name
+          (identifier) @test.case
+        )
+        right: (composite_literal
+          type: (map_type
+            key: (type_identifier) @map.key.type
+            value: (type_identifier)
+          ) (#eq? @map.key.type "string")
+          body: (literal_value
+            (keyed_element
+              (literal_element
+                (interpreted_string_literal) @test.map.key
+              )
+              (literal_element
+                (literal_value
+                  (keyed_element
+                    (literal_element
+                      (identifier) @test.field.name
+                    )
+                    (literal_element
+                      (interpreted_string_literal) @test.struct.name
+                    )
+                  )
+                ) @test.definition
+              )
+            ) @test.map.field.element
+          )
+        )
+      )
+      body: (block
+        (expression_statement
+          (call_expression
+            function: (selector_expression
+              operand: (identifier) @test.operand (#match? @test.operand "^[t]$")
+              field: (field_identifier) @test.method (#match? @test.method "^Run$")
+            )
+            arguments: (argument_list
+              (selector_expression
+                operand: (identifier) @test.case1 (#eq? @test.case @test.case1)
+                field: (field_identifier) @test.field.name1 (#eq? @test.field.name @test.field.name1)
+              )
             )
           )
         )
@@ -489,18 +541,26 @@ function M.get_table_test_name(bufnr, cursor_pos)
     return
   end
 
-  local all_queries = M.table_tests_list .. M.table_tests_loop .. M.table_tests_unkeyed .. M.table_tests_loop_unkeyed .. M.table_tests_inline .. M.table_tests_map_key
+  local all_queries = M.table_tests_list
+    .. M.table_tests_loop
+    .. M.table_tests_unkeyed
+    .. M.table_tests_loop_unkeyed
+    .. M.table_tests_inline
+    .. M.table_tests_map_key
+    .. M.table_tests_map_field
   local query = vim.treesitter.query.parse("go", all_queries)
   local curr_row, _ = unpack(cursor_pos)
-  -- Convert from 1-based to 0-based indexing
+  -- from 1-based to 0-based indexing
   curr_row = curr_row - 1
 
   local test_definitions = {}
   local test_names = {}
   local map_keys = {}
   local map_elements = {}
+  local map_field_elements = {}
+  local struct_names = {}
 
-  -- Collect all test definitions and their associated names
+  -- collect all the tests definitions and their names
   for id, node in query:iter_captures(root, bufnr, 0, -1) do
     local name = query.captures[id]
     if name == "test.definition" then
@@ -508,7 +568,7 @@ function M.get_table_test_name(bufnr, cursor_pos)
       table.insert(test_definitions, {
         node = node,
         start_row = start_row,
-        end_row = end_row
+        end_row = end_row,
       })
     elseif name == "test.name" then
       local test_name = vim.treesitter.get_node_text(node, bufnr)
@@ -517,7 +577,7 @@ function M.get_table_test_name(bufnr, cursor_pos)
         name = test_name,
         start_row = start_row,
         end_row = end_row,
-        type = "struct_field"
+        type = "struct_field",
       })
     elseif name == "test.map.key" then
       local test_name = vim.treesitter.get_node_text(node, bufnr)
@@ -526,19 +586,35 @@ function M.get_table_test_name(bufnr, cursor_pos)
         name = test_name,
         start_row = start_row,
         end_row = end_row,
-        type = "map_key"
+        type = "map_key",
       })
     elseif name == "test.map.element" then
       local start_row, _, end_row, _ = node:range()
       table.insert(map_elements, {
         node = node,
         start_row = start_row,
-        end_row = end_row
+        end_row = end_row,
+      })
+    elseif name == "test.map.field.element" then
+      local start_row, _, end_row, _ = node:range()
+      table.insert(map_field_elements, {
+        node = node,
+        start_row = start_row,
+        end_row = end_row,
+      })
+    elseif name == "test.struct.name" then
+      local test_name = vim.treesitter.get_node_text(node, bufnr)
+      local start_row, _, end_row, _ = node:range()
+      table.insert(struct_names, {
+        name = test_name,
+        start_row = start_row,
+        end_row = end_row,
+        type = "struct_name",
       })
     end
   end
 
-  -- Combine map keys and struct field names, prioritizing map keys
+  -- combine all possible options
   local all_test_names = {}
   for _, map_key in ipairs(map_keys) do
     table.insert(all_test_names, map_key)
@@ -546,13 +622,28 @@ function M.get_table_test_name(bufnr, cursor_pos)
   for _, test_name in ipairs(test_names) do
     table.insert(all_test_names, test_name)
   end
+  for _, struct_name in ipairs(struct_names) do
+    table.insert(all_test_names, struct_name)
+  end
 
-  -- First, check if we're in a map-based test context
+  -- check if we're in a map-based test with struct field as test name
+  for _, map_field_element in ipairs(map_field_elements) do
+    if curr_row >= map_field_element.start_row and curr_row <= map_field_element.end_row then
+      -- find the struct name within this map field element
+      for _, struct_name in ipairs(struct_names) do
+        if struct_name.start_row >= map_field_element.start_row and struct_name.end_row <= map_field_element.end_row then
+          return struct_name.name
+        end
+      end
+    end
+  end
+
+  -- check if we're in a map-based test with map key as test name
   local is_in_map_context = false
   for _, map_element in ipairs(map_elements) do
     if curr_row >= map_element.start_row and curr_row <= map_element.end_row then
       is_in_map_context = true
-      -- Find the map key within this map element
+      -- get the map test key
       for _, map_key in ipairs(map_keys) do
         if map_key.start_row >= map_element.start_row and map_key.end_row <= map_element.end_row then
           return map_key.name
@@ -596,7 +687,13 @@ function M.get_all_table_tests(bufnr)
     return {}
   end
 
-  local all_queries = M.table_tests_list .. M.table_tests_loop .. M.table_tests_unkeyed .. M.table_tests_loop_unkeyed .. M.table_tests_inline .. M.table_tests_map_key
+  local all_queries = M.table_tests_list
+    .. M.table_tests_loop
+    .. M.table_tests_unkeyed
+    .. M.table_tests_loop_unkeyed
+    .. M.table_tests_inline
+    .. M.table_tests_map_key
+    .. M.table_tests_map_field
   local query = vim.treesitter.query.parse("go", all_queries)
   local tests = {}
 
@@ -605,7 +702,7 @@ function M.get_all_table_tests(bufnr)
     if name == "test.name" then
       local test_name = vim.treesitter.get_node_text(node, bufnr)
       -- Remove quotes from string literal
-      test_name = test_name:gsub('^"(.*)"$', '%1')
+      test_name = test_name:gsub('^"(.*)"$', "%1")
       local row, col = node:start()
       tests[test_name] = { row = row, col = col }
     end
