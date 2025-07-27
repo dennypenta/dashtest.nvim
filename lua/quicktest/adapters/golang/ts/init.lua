@@ -256,59 +256,6 @@ local M = {
     )
   ]],
 
-  table_tests_map = [[
-    ;; query for map table tests
-    (block
-      (short_var_declaration
-        left: (expression_list
-          (identifier) @test.cases
-        )
-        right: (expression_list
-          (composite_literal
-            (literal_value
-              (keyed_element
-                (literal_element
-                  (interpreted_string_literal)  @test.name
-                )
-                (literal_element
-                  (literal_value)  @test.definition
-                )
-              )
-            )
-          )
-        )
-      )
-      (for_statement
-         (range_clause
-            left: (expression_list
-              (
-                (identifier) @test.key.name
-              )
-              (
-                (identifier) @test.case
-              )
-            )
-            right: (identifier) @test.cases1 (#eq? @test.cases @test.cases1)
-          )
-          body: (block
-           (expression_statement
-            (call_expression
-              function: (selector_expression
-                operand: (identifier) @test.operand (#match? @test.operand "^[t]$")
-                field: (field_identifier) @test.method (#match? @test.method "^Run$")
-              )
-              arguments: (argument_list
-                (
-                  (identifier) @test.key.name1 (#eq? @test.key.name @test.key.name1)
-                )
-              )
-            )
-          )
-        )
-      )
-    )
-  ]],
-
   table_tests_inline = [[
     ;; query for inline table tests (range over slice literal)
     (for_statement
@@ -356,23 +303,7 @@ local M = {
     )
   ]],
 
-  -- Simplified query to debug
-  debug_strings = [[
-    (interpreted_string_literal) @debug.string
-  ]],
 
-  -- More flexible query for inline table tests
-  table_tests_flexible = [[
-    ;; Match any string literal in keyed element that has "name" field
-    (keyed_element
-      (literal_element
-        (identifier) @field_name (#eq? @field_name "name")
-      )
-      (literal_element
-        (interpreted_string_literal) @test.name
-      )
-    ) @test.definition
-  ]],
 
   -- Map-based table tests where test name is the map key
   table_tests_map_key = [[
@@ -558,7 +489,7 @@ function M.get_table_test_name(bufnr, cursor_pos)
     return
   end
 
-  local all_queries = M.table_tests_list .. M.table_tests_loop .. M.table_tests_unkeyed .. M.table_tests_loop_unkeyed .. M.table_tests_map .. M.table_tests_inline .. M.table_tests_flexible .. M.table_tests_map_key
+  local all_queries = M.table_tests_list .. M.table_tests_loop .. M.table_tests_unkeyed .. M.table_tests_loop_unkeyed .. M.table_tests_inline .. M.table_tests_map_key
   local query = vim.treesitter.query.parse("go", all_queries)
   local curr_row, _ = unpack(cursor_pos)
   -- Convert from 1-based to 0-based indexing
@@ -665,7 +596,7 @@ function M.get_all_table_tests(bufnr)
     return {}
   end
 
-  local all_queries = M.table_tests_list .. M.table_tests_loop .. M.table_tests_unkeyed .. M.table_tests_loop_unkeyed .. M.table_tests_map .. M.table_tests_inline .. M.table_tests_flexible .. M.table_tests_map_key
+  local all_queries = M.table_tests_list .. M.table_tests_loop .. M.table_tests_unkeyed .. M.table_tests_loop_unkeyed .. M.table_tests_inline .. M.table_tests_map_key
   local query = vim.treesitter.query.parse("go", all_queries)
   local tests = {}
 
@@ -681,72 +612,6 @@ function M.get_all_table_tests(bufnr)
   end
 
   return tests
-end
-
----@param bufnr integer
----@return table
-function M.debug_queries(bufnr)
-  local root = get_root_node(bufnr)
-  if not root then
-    return {}
-  end
-
-  local all_queries = M.table_tests_list .. M.table_tests_loop .. M.table_tests_unkeyed .. M.table_tests_loop_unkeyed .. M.table_tests_map .. M.table_tests_inline .. M.table_tests_flexible .. M.table_tests_map_key
-  local query = vim.treesitter.query.parse("go", all_queries)
-  local captures = {}
-
-  for id, node in query:iter_captures(root, bufnr, 0, -1) do
-    local name = query.captures[id]
-    local text = vim.treesitter.get_node_text(node, bufnr)
-    local row, col = node:start()
-    table.insert(captures, {
-      capture_name = name,
-      text = text,
-      row = row,
-      col = col,
-      node_type = node:type()
-    })
-  end
-
-  return captures
-end
-
----@param bufnr integer
----@return table
-function M.debug_all_strings(bufnr)
-  local root = get_root_node(bufnr)
-  if not root then
-    return {}
-  end
-
-  local query = vim.treesitter.query.parse("go", M.debug_strings)
-  local strings = {}
-
-  for id, node in query:iter_captures(root, bufnr, 0, -1) do
-    local text = vim.treesitter.get_node_text(node, bufnr)
-    local row, col = node:start()
-    table.insert(strings, {
-      text = text,
-      row = row,
-      col = col
-    })
-  end
-
-  return strings
-end
-
----@param bufnr integer
----@param cursor_pos integer[]
----@return table
-function M.debug_cursor_test(bufnr, cursor_pos)
-  local table_test_name = M.get_table_test_name(bufnr, cursor_pos)
-  local sub_name = M.get_sub_testcase_name(bufnr, cursor_pos)
-  
-  return {
-    cursor_pos = cursor_pos,
-    table_test_name = table_test_name,
-    sub_name = sub_name,
-  }
 end
 
 return M
