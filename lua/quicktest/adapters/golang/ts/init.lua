@@ -631,7 +631,9 @@ function M.get_table_test_name(bufnr, cursor_pos)
     if curr_row >= map_field_element.start_row and curr_row <= map_field_element.end_row then
       -- find the struct name within this map field element
       for _, struct_name in ipairs(struct_names) do
-        if struct_name.start_row >= map_field_element.start_row and struct_name.end_row <= map_field_element.end_row then
+        if
+          struct_name.start_row >= map_field_element.start_row and struct_name.end_row <= map_field_element.end_row
+        then
           return struct_name.name
         end
       end
@@ -677,38 +679,6 @@ function M.get_table_test_name(bufnr, cursor_pos)
   end
 
   return nil
-end
-
----@param bufnr integer
----@return table<string, {row: integer, col: integer}>
-function M.get_all_table_tests(bufnr)
-  local root = get_root_node(bufnr)
-  if not root then
-    return {}
-  end
-
-  local all_queries = M.table_tests_list
-    .. M.table_tests_loop
-    .. M.table_tests_unkeyed
-    .. M.table_tests_loop_unkeyed
-    .. M.table_tests_inline
-    .. M.table_tests_map_key
-    .. M.table_tests_map_field
-  local query = vim.treesitter.query.parse("go", all_queries)
-  local tests = {}
-
-  for id, node in query:iter_captures(root, bufnr, 0, -1) do
-    local name = query.captures[id]
-    if name == "test.name" then
-      local test_name = vim.treesitter.get_node_text(node, bufnr)
-      -- Remove quotes from string literal
-      test_name = test_name:gsub('^"(.*)"$', "%1")
-      local row, col = node:start()
-      tests[test_name] = { row = row, col = col }
-    end
-  end
-
-  return tests
 end
 
 return M
