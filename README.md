@@ -56,7 +56,6 @@ With Lazy:
       "<leader>tl",
       function()
         local qt = require("quicktest")
-        -- current_win_mode return currently opened panel, split or popup
         qt.run_line()
         -- You can force open split or popup like this:
         -- qt.run_line('split')
@@ -130,18 +129,14 @@ With Lazy:
     {
       "<leader>tt",
       function()
-        local qt = require("quicktest")
-
-        qt.toggle_win("split")
+        require("quicktest.ui").get("panel").toggle("split")
       end,
       desc = "[T]est [T]oggle Window",
     },
     {
       "<leader>to",
       function()
-        local qt = require("quicktest")
-
-        qt.toggle_win("popup")
+        require("quicktest.ui").get("panel").toggle("popup")
       end,
       desc = "[T]est [T]oggle Window",
     },
@@ -153,15 +148,6 @@ With Lazy:
         qt.cancel_current_run()
       end,
       desc = "[T]est [C]ancel Current Run",
-    },
-    {
-      "<leader>ts",
-      function()
-        local qt = require("quicktest")
-
-        qt.toggle_summary()
-      end,
-      desc = "[T]est [S]ummary",
     },
     {
       "]n",
@@ -179,11 +165,22 @@ With Lazy:
       end,
       desc = "Prev failed test",
     },
+        {
+      "<leader>ts",
+      function()
+        -- ui is a registry of all registered ui plugins
+        local ui = require("quicktest.ui")
+        -- you can get any by a name property defined in the plugin itself,
+        -- e.g. summary plugin defines its name property as "summary"
+        local summary = ui.get("summary")
+        summary.toggle()
+      end,
+      desc = "[T]est [S]ummary",
+    },
     {
       "<leader>tS",
       function()
-        local qt = require("quicktest")
-        qt.toggle_summary_failed_filter()
+        require("quicktest.ui").get("summary").toggle_failed_filter()
       end,
       desc = "Toggle summary show only failed",
     },
@@ -236,16 +233,6 @@ vim.keymap.set("n", "<leader>ta", qt.run_all, {
 })
 vim.keymap.set("n", "<leader>tR", qt.run_previous, {
   desc = "[T]est Run [P]revious",
-})
--- vim.keymap.set("n", "<leader>tt", function()
---   qt.toggle_win("popup")
--- end, {
---   desc = "[T]est [T]oggle popup window",
--- })
-vim.keymap.set("n", "<leader>tt", function()
-  qt.toggle_win("split")
-end, {
-  desc = "[T]est [T]oggle Window",
 })
 vim.keymap.set("n", "<leader>tc", function()
   qt.cancel_current_run()
@@ -389,11 +376,6 @@ qt.run_dir()
 qt.run_all('popup')
 qt.run_all('split')
 qt.run_all()
-
--- Open or close split/popup if already opened, without running tests.
--- Just open and close window.
-qt.toggle_win('popup')
-qt.toggle_win('split')
 
 -- Take previous test run and run in popup/split
 qt.run_previous('popup')

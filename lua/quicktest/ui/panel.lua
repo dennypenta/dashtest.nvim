@@ -507,3 +507,29 @@ return function(opts)
 
   return M
 end
+
+function M.toggle(mode)
+  local is_open = false
+  if mode == "split" then
+    is_open = M.is_split_opened()
+  else
+    is_open = M.is_popup_opened()
+  end
+
+  if is_open then
+    M.try_close_win(mode)
+  else
+    M.try_open_win(mode)
+  end
+end
+
+--- @return WinModeWithoutAuto
+function M.current_win_mode()
+  if M.is_split_opened() then
+    return "split"
+  elseif M.is_popup_opened() then
+    return "popup"
+  else
+    return M.config.default_win_mode or "split"
+  end
+end

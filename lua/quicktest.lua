@@ -22,28 +22,6 @@ M.setup = function(args)
   ui.init_with_consumers(M.config.ui or {})
 end
 
-M.current_win_mode = function()
-  local ui = require("quicktest.ui")
-  local panel = ui.get("panel")
-  local default_win_mode = panel and panel.config.default_win_mode or "split"
-  return module.current_win_mode(default_win_mode)
-end
-
---- @param mode WinModeWithoutAuto
-M.open_win = function(mode)
-  return module.try_open_win(mode)
-end
-
---- @param mode WinModeWithoutAuto
-M.close_win = function(mode)
-  return module.try_close_win(mode)
-end
-
---- @param mode WinModeWithoutAuto
-M.toggle_win = function(mode)
-  return module.toggle_win(mode)
-end
-
 --- @param mode WinMode?
 M.run_previous = function(mode)
   return module.run_previous(M.config, mode or "auto")
@@ -79,39 +57,6 @@ end
 
 M.cancel_current_run = function()
   module.kill_current_run()
-end
-
--- Summary window controls
-M.open_summary = function()
-  local ui = require("quicktest.ui")
-  local summary = ui.get("summary")
-  if summary then
-    summary.open()
-  end
-end
-
-M.close_summary = function()
-  local ui = require("quicktest.ui")
-  local summary = ui.get("summary")
-  if summary then
-    summary.close()
-  end
-end
-
-M.toggle_summary = function()
-  local ui = require("quicktest.ui")
-  local summary = ui.get("summary")
-  if summary then
-    summary.toggle()
-  end
-end
-
-M.toggle_summary_failed_filter = function()
-  local ui = require("quicktest.ui")
-  local summary = ui.get("summary")
-  if summary and summary.toggle_failed_filter then
-    summary.toggle_failed_filter()
-  end
 end
 
 -- Navigate to next failed test
