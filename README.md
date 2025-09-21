@@ -1,5 +1,9 @@
 # Quicktest
 
+This project is a fork of http://github.com/quolpr/quicktest.nvim
+
+If you prefer minimal experience - look at the original project.
+
 - **Contextual Test Triggering:** Run tests directly from where your cursor is located or execute all tests in the entire file/dir/project.
 - **Flexible Test Reruns:** Rerun tests from any location(with `require('quicktest').run_previous()`, keybind is in usage example), automatically opening window or using an existing if it's open.
 - **Live-Scrolling Results:** Continuously scroll through test results as they are generated. But stop scrolling if you decided to scroll up.
