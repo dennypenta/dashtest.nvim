@@ -139,7 +139,6 @@ return function(opts)
   M.get_split_winid = function()
     return find_win_by_bufnr(get_split_buf())
   end
-
   local function add_autocmd(winid, buf)
     vim.api.nvim_create_autocmd("BufWinEnter", {
       callback = function(args)
@@ -251,7 +250,6 @@ return function(opts)
       end
       table.insert(lines, "")
     end
-
     -- Add output lines
     for _, output_line in ipairs(output_lines) do
       if output_line.type == "stdout" or output_line.type == "stderr" then
@@ -376,7 +374,6 @@ return function(opts)
     if storage_subscription then
       return -- Already initialized
     end
-
     storage_subscription = function(event_type, data)
       if event_type == "test_output" then
         M.handle_output(data)
@@ -504,32 +501,32 @@ return function(opts)
       end
     end
   end
+  function M.toggle(mode)
+    local is_open = false
+    if mode == "split" then
+      is_open = M.is_split_opened()
+    else
+      is_open = M.is_popup_opened()
+    end
+
+    if is_open then
+      M.try_close_win(mode)
+    else
+      M.try_open_win(mode)
+    end
+  end
+
+  --- @return WinModeWithoutAuto
+  function M.current_win_mode()
+    if M.is_split_opened() then
+      return "split"
+    elseif M.is_popup_opened() then
+      return "popup"
+    else
+      return M.config.default_win_mode or "split"
+    end
+  end
 
   return M
 end
 
-function M.toggle(mode)
-  local is_open = false
-  if mode == "split" then
-    is_open = M.is_split_opened()
-  else
-    is_open = M.is_popup_opened()
-  end
-
-  if is_open then
-    M.try_close_win(mode)
-  else
-    M.try_open_win(mode)
-  end
-end
-
---- @return WinModeWithoutAuto
-function M.current_win_mode()
-  if M.is_split_opened() then
-    return "split"
-  elseif M.is_popup_opened() then
-    return "popup"
-  else
-    return M.config.default_win_mode or "split"
-  end
-end

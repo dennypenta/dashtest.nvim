@@ -32,13 +32,14 @@ local M = {}
 ---@field is_enabled fun(bufnr: number, type: RunType): boolean
 ---@field build_dap_config? fun(bufnr: integer, params: any): table
 
+---@class QuicktestUI
+---@field name string
+---@field init fun()
+---@field cleanup fun()
+
 ---@class QuicktestConfig
 ---@field adapters QuicktestAdapter[]
----@field default_win_mode WinModeWithoutAuto
----@field use_builtin_colorizer boolean
----@field strategy? 'default' | 'dap' | fun(adapter: QuicktestAdapter): string
----@field quickfix? {enabled: boolean, open: boolean}
----@field diagnostics? {enabled: boolean}
+---@field ui QuicktestUI[]
 
 --- @type {[string]: {type: string, adapter_name: string, bufname: string, cursor_pos: integer[]}} | nil
 local previous_run = nil
@@ -129,7 +130,6 @@ end
 --- @return string
 local function get_strategy_name(config, adapter, opts)
   local available_strategies = strategies.get_available()
-
   local function validate_and_fallback(strategy_name, fallback)
     if strategy_name and not available_strategies[strategy_name] then
       local available_names = vim.tbl_keys(available_strategies)
@@ -260,7 +260,6 @@ function M.prepare_and_run(config, type, mode, adapter_name, opts)
 
   return M.run(adapter, params, mode, config, opts)
 end
-
 --- @param config QuicktestConfig
 --- @param mode WinMode?
 --- @return QuicktestStrategyResult?
