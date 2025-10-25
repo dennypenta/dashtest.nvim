@@ -397,8 +397,11 @@ return function(opts)
     end
 
     if M.config.join_to_panel then
-      local panel = require("quicktest.ui.panel")
-      if panel.is_split_opened() then
+      local panel = require("quicktest.ui").get("panel")
+      if not panel then
+        vim.notify("no panel widget found", vim.log.levels.ERROR)
+      end
+      if panel and panel.is_split_opened() then
         -- If panel is already open, create/join the summary split directly
         local panel_winid = panel.get_split_winid()
         if panel_winid ~= -1 then
