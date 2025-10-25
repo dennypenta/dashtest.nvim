@@ -94,8 +94,6 @@ return function(opts)
           end
         end,
       })
-
-      was_buf_initialized[buf] = true
     end
 
     -- Find buffer with name if it exists
@@ -120,7 +118,31 @@ return function(opts)
 
   -- Get or create buffers with specific names
   local function get_split_buf()
-    return get_or_create_buf("quicktest-split")
+    local buf = get_or_create_buf("quicktest-split")
+
+    -- Add autocmd to close summary when panel split window is closed (only once)
+    local delGroup = vim.api.nvim_create_augroup("quicktest_panel_split_del", { clear = true })
+    vim.api.nvim_create_autocmd("BufWinLeave", {
+      buffer = buf,
+      group = delGroup,
+      callback = function()
+        -- Schedule to avoid issues during window close
+        vim.schedule(function()
+          -- Only close summary if panel is no longer visible and summary is still open
+          if not is_buf_visible(buf) then
+            local success, ui = pcall(require, "quicktest.ui")
+            if success then
+              local summary = ui.get("summary")
+              if summary then
+                summary.close()
+              end
+            end
+          end
+        end)
+      end,
+    })
+
+    return buf
   end
 
   local function get_popup_buf()
@@ -331,8 +353,8 @@ return function(opts)
     if win_id ~= -1 then
       -- Check if summary should also be closed
       local summary = require("quicktest.ui").get("summary")
-      if summary ~= nil and summary.config.join_to_panel then
-        summary._close()
+      if summary and summary.config.join_to_panel then
+        summary.close()
       end
       vim.api.nvim_win_close(win_id, true)
     end
