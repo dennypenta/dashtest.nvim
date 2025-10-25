@@ -138,6 +138,23 @@ return function(opts)
   local function setup_keybindings(buf)
     local opts = { buffer = buf, noremap = true, silent = true }
 
+    -- Prevent cursor from selecting header lines (first 3 lines) when tests exist
+    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufEnter" }, {
+      buffer = buf,
+      callback = function()
+        local win = find_win_by_bufnr(buf)
+        if win ~= -1 and api.nvim_win_is_valid(win) then
+          local cursor = api.nvim_win_get_cursor(win)
+          local line = cursor[1]
+          local line_count = api.nvim_buf_line_count(buf)
+          -- If cursor is on header lines (1-3) and there are tests, move it to first test line (4)
+          if line < 4 and line_count > 3 then
+            api.nvim_win_set_cursor(win, { 4, 0 })
+          end
+        end
+      end,
+    })
+
     -- Enter - jump to test location
     vim.keymap.set("n", "<CR>", function()
       local line = api.nvim_win_get_cursor(0)[1]
@@ -226,6 +243,16 @@ return function(opts)
     current_window = popup.winid
     current_buffer = buf
 
+    -- Set window options for neotree-like appearance
+    if api.nvim_win_is_valid(popup.winid) then
+      vim.wo[popup.winid].cursorline = true
+      -- Only move cursor to line 4 if there are test items
+      local line_count = api.nvim_buf_line_count(buf)
+      if line_count > 3 then
+        pcall(api.nvim_win_set_cursor, popup.winid, { 4, 0 })
+      end
+    end
+
     return popup
   end
 
@@ -259,6 +286,7 @@ return function(opts)
     -- Configure window properties
     if api.nvim_win_is_valid(new_winid) then
       vim.w[new_winid].quicktest_summary = true
+      vim.wo[new_winid].cursorline = true
       -- Don't set previewwindow for joined splits to avoid conflicts
     end
 
@@ -267,6 +295,14 @@ return function(opts)
 
     -- Call update_display directly instead of scheduling
     update_display()
+
+    -- Set initial cursor position to first test line (line 4) if tests exist
+    if api.nvim_win_is_valid(new_winid) then
+      local line_count = api.nvim_buf_line_count(buf)
+      if line_count > 3 then
+        pcall(api.nvim_win_set_cursor, new_winid, { 4, 0 })
+      end
+    end
   end
 
   -- Update summary display
@@ -365,7 +401,11 @@ return function(opts)
       return
     end
 
-    -- Apply highlights
+    -- Apply header highlights (first 3 lines)
+    pcall(api.nvim_buf_add_highlight, current_buffer, -1, "Title", 0, 0, -1)
+    pcall(api.nvim_buf_add_highlight, current_buffer, -1, "Title", 2, 0, -1)
+
+    -- Apply highlights to test items
     if #test_list > 0 then
       for i, test in ipairs(test_list) do
         local line_idx = i + 2 -- Skip header lines
