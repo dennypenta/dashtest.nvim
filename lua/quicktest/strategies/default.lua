@@ -8,6 +8,9 @@ local M = {
 }
 
 -- Module-level current job tracking (shared with kill function)
+---@alias JobStatus 'running' | 'finished' | 'canceled'
+---@alias CmdJob {id: number, started_at: number, finished_at?: number, pid: number?, status: JobStatus, exit_code?: number}
+---@type CmdJob | nil
 local current_job = nil
 
 -- Expose kill function for external access
@@ -41,7 +44,7 @@ M.run = function(adapter, params, config, opts)
   -- Clear storage for new run
   storage.clear()
 
-  --- @type {id: number, started_at: number, pid: number?, exit_code: number?}
+  --- @type CmdJob
   local job = { id = math.random(10000000000000000), started_at = vim.uv.now() }
   current_job = job
 

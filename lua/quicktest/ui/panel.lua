@@ -366,27 +366,22 @@ return function(opts)
     for _, win in ipairs(windows) do
       local win_bufnr = vim.api.nvim_win_get_buf(win)
       if win_bufnr == buf then
-        local line_count = vim.api.nvim_buf_line_count(buf)
-
-        if line_count < 3 then
-          return
-        end
-
-        vim.api.nvim_win_set_cursor(win, { line_count - 2, 0 })
+        vim.api.nvim_win_call(win, function()
+          vim.cmd("normal! G2k")
+        end)
       end
     end
   end
 
   ---@param buf number
-  function M.should_continue_scroll(buf)
+  ---@param line_count number
+  function M.should_continue_scroll(buf, line_count)
     local windows = vim.api.nvim_list_wins()
     for _, win in ipairs(windows) do
       local win_bufnr = vim.api.nvim_win_get_buf(win)
       if win_bufnr == buf then
         local current_pos = vim.api.nvim_win_get_cursor(win)
-        local line_count = vim.api.nvim_buf_line_count(buf)
-
-        return current_pos[1] >= line_count - 2
+        return current_pos[1] >= line_count
       end
     end
   end
@@ -453,7 +448,9 @@ return function(opts)
     local use_builtin_colorizer = M.config.use_builtin_colorizer
 
     for _, buf in ipairs(M.get_buffers()) do
-      local should_scroll = M.should_continue_scroll(buf)
+      local lines = vim.split(output_data.data, "\n")
+
+      local should_scroll = M.should_continue_scroll(buf, #lines)
 
       if output_data.type == "stdout" then
         local lines = vim.split(output_data.data, "\n")
@@ -500,7 +497,7 @@ return function(opts)
   end
 
   -- Show test result
-  function M.show_result(result_data)
+  function M.shhandle_outputow_result(result_data)
     local status_text = ""
     local highlight_group = ""
 
