@@ -35,6 +35,7 @@ With Lazy:
         require("quicktest.adapters.criterion"),
         require("quicktest.adapters.dart"),
         require("quicktest.adapters.rspec"),
+        require("quicktest.adapters.zig"),
       },
       ui = {
         require("quicktest.ui.panel")({ 
@@ -207,6 +208,7 @@ qt.setup({
     require("quicktest.adapters.criterion"),
     require("quicktest.adapters.dart"),
     require("quicktest.adapters.rspec"),
+    require("quicktest.adapters.zig"),
   },
   ui = {
     require("quicktest.ui.panel")({
@@ -353,6 +355,20 @@ qt.setup({
       ---@field bin (fun(bufnr: integer, fallback: string): string)?
       ---@field cwd (fun(bufnr: integer, fallback: string): string)?
       ---@field is_enabled (fun(bufnr: integer, fallback: boolean): boolean)?
+    }),
+    require("quicktest.adapters.zig")({
+      ---@class ZigAdapterOptions
+      ---@field cwd (fun(bufnr: integer, current: string?): string)?
+      ---@field bin (fun(bufnr: integer, current: string?): string)?
+      ---@field test_filter_option (fun(bufnr: integer, current: string): string)?
+      ---@field additional_args (fun(bufnr: integer): string[])?
+      ---@field args (fun(bufnr: integer, current: string[]): string[])?
+      ---@field env (fun(bufnr: integer, current: table<string, string>): table<string, string>)?
+      ---@field is_enabled (fun(bufnr: integer, type: RunType, current: boolean): boolean)?
+      ---@field dap (fun(bufnr: integer, params: ZigRunParams): table)?
+
+      -- Custom test filter option (default: "test-filter")
+      -- test_filter_option = function(bufnr, current) return "test-filter" end
     }),
   },
   -- split or popup mode, when argument not specified

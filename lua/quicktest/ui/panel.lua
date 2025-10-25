@@ -330,9 +330,9 @@ return function(opts)
 
     if win_id ~= -1 then
       -- Check if summary should also be closed
-      local success, summary = pcall(require, "quicktest.ui.summary")
-      if success and summary.config.join_to_panel then
-        summary.close()
+      local summary = require("quicktest.ui").get("summary")
+      if summary ~= nil and summary.config.join_to_panel then
+        summary._close()
       end
       vim.api.nvim_win_close(win_id, true)
     end
@@ -529,4 +529,3 @@ return function(opts)
 
   return M
 end
-

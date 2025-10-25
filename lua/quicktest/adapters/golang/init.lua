@@ -230,7 +230,6 @@ M.run = function(params, send)
   args = M.options.args and M.options.args(params.bufnr, args) or args
 
   local bin = M.get_bin(params.bufnr)
-  bin = M.options.bin and M.options.bin(params.bufnr, bin) or bin
 
   local env = vim.fn.environ()
   env = M.options.env and M.options.env(params.bufnr, env) or env

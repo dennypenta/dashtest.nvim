@@ -15,8 +15,9 @@ local M = {}
 ---@class AdapterRunOpts
 ---@field additional_args string[]?
 ---@field strategy ('default' | 'dap')?
+---@field cmd_override string[]?
 
----@alias CmdData {type: 'stdout', raw: string, output: string?, decoded: any} | {type: 'stderr', raw: string, output: string?, decoded: any} | {type: 'exit', code: number} | {type: 'test_result', test_name: string, status: 'passed' | 'failed', location: string?}
+---@alias CmdData {type: 'stdout', raw: string, output: string?, decoded: any} | {type: 'stderr', raw: string, output: string?, decoded: any} | {type: 'exit', code: number} | {type: 'test_started', test_name: string, status: 'running', location: string?} | {type: 'test_result', test_name: string, status: 'passed' | 'failed', location: string?}
 
 ---@alias RunType 'line' | 'file' | 'dir' | 'all'
 
@@ -31,6 +32,8 @@ local M = {}
 ---@field title fun(params: any): string
 ---@field is_enabled fun(bufnr: number, type: RunType): boolean
 ---@field build_dap_config? fun(bufnr: integer, params: any): table
+---@field get_bin fun(bufnr: integer): string
+---@field build_cmd fun(params: any): string[]
 
 ---@class QuicktestUI
 ---@field name string
@@ -315,6 +318,38 @@ function M.kill_current_run()
   if default_strategy and default_strategy.kill_current_run then
     default_strategy.kill_current_run()
   end
+end
+
+--- Get the build command for the current adapter
+--- This allows external tools to get the build command before running DAP
+--- @param config QuicktestConfig
+--- @param type string
+--- @param adapter_name Adapter
+--- @param opts AdapterRunOpts?
+--- @return string[] | nil
+function M.get_build_command(config, type, adapter_name, opts)
+  opts = opts or {}
+  local current_buffer = api.nvim_get_current_buf()
+  local win = vim.api.nvim_get_current_win()
+  local cursor_pos = vim.api.nvim_win_get_cursor(win)
+
+  local adapter, params, error = get_adapter_and_params(config, type, adapter_name, current_buffer, cursor_pos, opts)
+
+  if error ~= nil or adapter == nil or params == nil then
+    return nil
+  end
+
+  -- Check if adapter supports build_cmd
+  if not adapter.build_cmd then
+    return nil
+  end
+
+  local args = { adapter.get_bin(params.bufnr) }
+  for _, arg in pairs(vim.deepcopy(adapter.build_cmd(params))) do
+    table.insert(args, arg)
+  end
+
+  return args
 end
 
 return M

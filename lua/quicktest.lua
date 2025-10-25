@@ -59,6 +59,42 @@ M.cancel_current_run = function()
   module.kill_current_run()
 end
 
+--- Get the build command for the current adapter
+--- This allows external tools (like compile.nvim) to get the build command before running DAP
+--- @param adapter Adapter?
+--- @param opts AdapterRunOpts?
+--- @return string[] | nil
+M.get_build_line = function(adapter, opts)
+  return module.get_build_command(M.config, "line", adapter or "auto", opts or {})
+end
+
+--- Get the build command for the current adapter
+--- This allows external tools (like compile.nvim) to get the build command before running DAP
+--- @param adapter Adapter?
+--- @param opts AdapterRunOpts?
+--- @return string[] | nil
+M.get_build_file = function(adapter, opts)
+  return module.get_build_command(M.config, "file", adapter or "auto", opts or {})
+end
+
+--- Get the build command for the current adapter
+--- This allows external tools (like compile.nvim) to get the build command before running DAP
+--- @param adapter Adapter?
+--- @param opts AdapterRunOpts?
+--- @return string[] | nil
+M.get_build_dir = function(adapter, opts)
+  return module.get_build_command(M.config, "dir", adapter or "auto", opts or {})
+end
+
+--- Get the build command for the current adapter
+--- This allows external tools (like compile.nvim) to get the build command before running DAP
+--- @param adapter Adapter?
+--- @param opts AdapterRunOpts?
+--- @return string[] | nil
+M.get_build_all = function(adapter, opts)
+  return module.get_build_command(M.config, "all", adapter or "auto", opts or {})
+end
+
 -- Navigate to next failed test
 M.next_failed_test = function()
   local storage = require("quicktest.storage")

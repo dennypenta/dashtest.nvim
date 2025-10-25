@@ -375,7 +375,10 @@ return function(opts)
     end
 
     if M.config.join_to_panel then
-      local panel = require("quicktest.ui.panel")
+      local panel = require("quicktest.ui").get("panel")
+      if panel == nil then
+        return vim.notify("panel ui is not registered", vim.log.levels.ERROR)
+      end
       if panel.is_split_opened() then
         -- If panel is already open, create/join the summary split directly
         local panel_winid = panel.get_split_winid()
@@ -392,12 +395,25 @@ return function(opts)
     end
   end
 
-  function M.close()
+  function M._close()
     if current_window and api.nvim_win_is_valid(current_window) then
       pcall(api.nvim_win_close, current_window, true)
     end
     current_window = nil
     -- Don't set current_buffer to nil, keep reference for reuse
+  end
+
+  function M.close()
+    if M.config.join_to_panel then
+      local panel = require("quicktest.ui").get("panel")
+      if panel == nil then
+        return vim.notify("panel ui is not registered", vim.log.levels.ERROR)
+      end
+      -- panel in joint is expected only as a split
+      panel.try_close_win("split")
+    end
+
+    M._close()
   end
 
   function M.toggle()
