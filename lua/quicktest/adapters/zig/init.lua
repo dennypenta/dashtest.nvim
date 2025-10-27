@@ -28,6 +28,19 @@ end
 
 local ns = vim.api.nvim_create_namespace("quicktest-zig")
 
+--- Strip ANSI color codes from a string
+--- @param str string
+--- @return string
+local function strip_ansi_codes(str)
+  -- Remove ANSI escape sequences more comprehensively
+  -- ESC[ followed by any number of parameters and a final character
+  local cleaned = str:gsub("\27%[[%d;]*%a", "")
+  -- Also remove ESC followed by other sequences
+  cleaned = cleaned:gsub("\27%]%d+;[^\7]*\7", "") -- OSC sequences
+  cleaned = cleaned:gsub("\27%[[%d;]*", "") -- Incomplete sequences
+  return cleaned
+end
+
 --- @param bufnr integer
 --- @return string | nil
 local function find_cwd(bufnr)
@@ -196,9 +209,14 @@ end
 ---@param params ZigRunParams
 ---@param state ZigOutputState
 M.handle_output = function(line, send, params, state)
+  -- Strip ANSI color codes for reliable parsing (especially in DAP mode)
+  local clean_line = strip_ansi_codes(line)
+
   -- Parse test failures
-  -- Format: error: 'test.test.failed test' failed: expected 5, found 4
-  local full_test_name, error_msg = line:match("error: '([^']+)' failed:%s*(.*)$")
+  -- Format: 2/3 server_test.test.11...FAIL (Jo)
+  -- Note: Line may end with \r (carriage return)
+  local full_test_name, error_msg = clean_line:match("^%d+/%d+ (.-)%.%.%.FAIL %((.+)%)%s*$")
+
   if full_test_name then
     -- Extract just the test name (remove the module prefix)
     -- Format is typically: "module.test.test_name" or "test.test.test_name"
@@ -206,7 +224,12 @@ M.handle_output = function(line, send, params, state)
     state.current_failing_test = test_name
     state.current_error_message = error_msg
 
-    -- Only send failure if we haven't already marked this test
+    -- Initialize test_results if it doesn't exist (e.g., when called from DAP)
+    if not state.test_results then
+      state.test_results = {}
+    end
+
+    -- Only mark test as failed if we haven't already
     if state.test_results[test_name] ~= "failed" then
       -- Send test_started first if we haven't seen this test before
       if not state.test_results[test_name] then
@@ -216,12 +239,7 @@ M.handle_output = function(line, send, params, state)
           status = "running",
         })
       end
-      -- Then send test_result
-      send({
-        type = "test_result",
-        test_name = test_name,
-        status = "failed",
-      })
+      -- Don't send test_result yet - wait for stack trace to get location
       state.test_results[test_name] = "failed"
     end
     return
@@ -229,17 +247,16 @@ M.handle_output = function(line, send, params, state)
 
   -- Parse test location from stack trace
   -- Format: /path/to/test.zig:15:5: 0x100b5c857 in test.failed test (test)
-  -- This line comes after the error line, so we use current_failing_test
+  -- This line comes after the FAIL line, so we use current_failing_test
   -- We match the line that contains the exact test name
   if state.current_failing_test then
     -- Only process lines that start with a path (stack trace lines)
-    -- Skip error lines that contain "error: "
-    if not line:match("^error: ") and line:match("^/") then
+    if clean_line:match("^/") then
       -- Escape special pattern characters in test name for matching
       local escaped_test_name = state.current_failing_test:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
       -- Match line that contains "in test.<exact_test_name>"
       local pattern = "^([^:]+%.zig):(%d+):%d+:.* in test%." .. escaped_test_name .. " %("
-      local file_path, line_str = line:match(pattern)
+      local file_path, line_str = clean_line:match(pattern)
       if file_path and line_str then
         local line_no = tonumber(line_str)
 
@@ -260,6 +277,11 @@ M.handle_output = function(line, send, params, state)
           status = "failed",
           location = location,
         })
+
+        -- Mark that we've sent the test_result
+        if state.test_results then
+          state.test_results[state.current_failing_test .. "_result_sent"] = true
+        end
 
         state.current_failing_test = nil -- Reset after finding location
         state.current_error_message = nil
@@ -340,17 +362,29 @@ M.run = function(params, send)
     end,
     on_exit = function(_, return_val)
       vim.schedule(function()
-        -- Parse the Build Summary to emit test stats
-        -- Format: "Build Summary: 6/8 steps succeeded; 1 failed; 2/4 tests passed; 2 failed"
-        -- or: "Build Summary: 8/8 steps succeeded; 2/2 tests passed"
+        -- Parse the test summary to emit test stats
         local output_text = table.concat(all_output, "\n")
+        -- Strip ANSI codes for reliable parsing
+        local clean_output = strip_ansi_codes(output_text)
 
-        -- Extract test counts from Build Summary
-        local passed_tests, total_tests, failed_tests = output_text:match("(%d+)/(%d+) tests passed; (%d+) failed")
-        if not passed_tests then
-          -- Try format without failures: "2/2 tests passed"
-          passed_tests, total_tests = output_text:match("(%d+)/(%d+) tests passed")
-          failed_tests = "0"
+        -- Extract test counts
+        -- Format: "1 passed; 0 skipped; 2 failed."
+        local passed_tests, skipped_tests, failed_tests = clean_output:match("(%d+) passed; (%d+) skipped; (%d+) failed%.")
+        local total_tests = nil
+
+        if passed_tests then
+          -- Calculate total from passed + skipped + failed
+          passed_tests = tonumber(passed_tests)
+          skipped_tests = tonumber(skipped_tests)
+          failed_tests = tonumber(failed_tests)
+          total_tests = passed_tests + skipped_tests + failed_tests
+        else
+          -- Try success format: "All 3 tests passed."
+          total_tests = clean_output:match("All (%d+) tests passed%.")
+          if total_tests then
+            passed_tests = tonumber(total_tests)
+            failed_tests = 0
+          end
         end
 
         if passed_tests and total_tests then
@@ -358,11 +392,13 @@ M.run = function(params, send)
           total_tests = tonumber(total_tests)
           failed_tests = tonumber(failed_tests)
 
-          -- If we're running specific tests, mark them as passed if not already failed
+          -- If we're running specific tests, finalize their status
           if #params.test_names > 0 then
             for _, test_name in ipairs(params.test_names) do
-              -- Check if test is still "running" (not yet marked as failed/passed)
-              if state.test_results[test_name] == "running" then
+              local status = state.test_results[test_name]
+
+              -- For tests still "running", mark as passed
+              if status == "running" then
                 -- Find test location using treesitter
                 local location = nil
                 if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
@@ -380,6 +416,14 @@ M.run = function(params, send)
                   location = location,
                 })
                 state.test_results[test_name] = "passed"
+              -- For tests marked as "failed" but location not yet sent, send without location
+              elseif status == "failed" and not state.test_results[test_name .. "_result_sent"] then
+                send({
+                  type = "test_result",
+                  test_name = test_name,
+                  status = "failed",
+                })
+                state.test_results[test_name .. "_result_sent"] = true
               end
             end
           else
@@ -441,19 +485,18 @@ M.after_run = function(params, results)
   end
 
   local output_text = table.concat(full_output, "\n")
+  -- Strip ANSI codes for reliable parsing
+  local clean_output = strip_ansi_codes(output_text)
 
   -- Parse Zig test output to find failed tests
-  -- We need to match stack trace lines that contain "in test.<test_name>"
-  -- Example:
-  -- error: 'test.test.failed test' failed: expected 5, found 4
-  -- /path/to/test.zig:15:5: 0x100d58857 in test.failed test (test)
-
   local failed_tests = {}
   local current_failing_test = nil
 
-  for line in output_text:gmatch("[^\r\n]+") do
-    -- First, check if this is an error line to extract the test name
-    local full_test_name = line:match("error: '([^']+)' failed:")
+  for line in clean_output:gmatch("[^\r\n]+") do
+    -- Check if this is a test failure line
+    -- Format: 2/3 server_test.test.11...FAIL (Jo)
+    -- Note: Line may end with \r (carriage return)
+    local full_test_name = line:match("^%d+/%d+ (.-)%.%.%.FAIL %((.+)%)%s*$")
     if full_test_name then
       -- Extract just the test name (remove the module prefix)
       -- Format is typically: "module.test.test_name" or "test.test.test_name"

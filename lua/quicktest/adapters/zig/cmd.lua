@@ -27,7 +27,7 @@ function M.build_args(cmd_override, test_names, additional_args, test_filter_opt
     "build",
     "test",
     "--summary",
-    "all",
+    "failures",
   }
   if cmd_override then
     args = vim.deepcopy(cmd_override)
