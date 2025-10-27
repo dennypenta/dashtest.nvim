@@ -106,6 +106,9 @@ end
 ---@field cursor_pos integer[]
 ---@field opts AdapterRunOpts
 
+---@class GoOutputState
+---@field running_tests string[]
+
 ---@param bufnr integer
 ---@return string
 M.get_cwd = function(bufnr)
@@ -218,6 +221,116 @@ M.build_dir_run_params = function(bufnr, cursor_pos, opts)
     nil
 end
 
+---Parse a single line of Go test plain text output and send structured events
+---@param line string
+---@param send fun(data: CmdData)
+---@param params GoRunParams
+---@param state GoOutputState
+M.handle_output = function(line, send, params, state)
+  -- Check for test start (=== RUN)
+  local run_test_name = line:match("^=== RUN%s+(.+)$")
+  if run_test_name then
+    -- Test started - track it and send event
+    table.insert(state.running_tests, run_test_name)
+    send({
+      type = "test_started",
+      test_name = run_test_name,
+      status = "running",
+    })
+    return
+  end
+
+  -- Check for test completion (--- PASS/FAIL/SKIP)
+  local test_name_pass = line:match("^%-%-%-%s+PASS:%s+([^%(]+)")
+  local test_name_fail = line:match("^%-%-%-%s+FAIL:%s+([^%(]+)")
+  local test_name_skip = line:match("^%-%-%-%s+SKIP:%s+([^%(]+)")
+
+  local status, test_name
+  if test_name_pass then
+    status = "passed"
+    test_name = test_name_pass
+  elseif test_name_fail then
+    status = "failed"
+    test_name = test_name_fail
+  elseif test_name_skip then
+    status = "skipped"
+    test_name = test_name_skip
+  end
+
+  if status and test_name then
+    -- Remove trailing whitespace from test_name
+    test_name = test_name:gsub("%s+$", "")
+
+    -- Remove from running tests
+    for i, running_test in ipairs(state.running_tests) do
+      if running_test == test_name then
+        table.remove(state.running_tests, i)
+        break
+      end
+    end
+
+    -- Send event without location (location will be added in after_run)
+    send({
+      type = "test_result",
+      test_name = test_name,
+      status = status,
+    })
+    return
+  end
+
+  -- Parse assert failure locations and messages from output
+
+  -- Pattern: "Error Trace:" with full path - most important for location
+  local full_path, line_str = line:match("Error Trace:%s*([^:]+):(%d+)")
+  if full_path and line_str then
+    local line_no = tonumber(line_str)
+    -- Associate with the most recent running test
+    local current_test = state.running_tests[#state.running_tests]
+    if current_test then
+      send({
+        type = "assert_failure",
+        test_name = current_test,
+        full_path = full_path,
+        line = line_no,
+        message = "",
+      })
+    end
+    return
+  end
+
+  -- Parse "Error:" field to get the main error message
+  local error_message = line:match("Error:%s*(.+)$")
+  if error_message then
+    error_message = error_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
+    -- Associate with the most recent running test
+    local current_test = state.running_tests[#state.running_tests]
+    if current_test then
+      send({
+        type = "assert_error",
+        test_name = current_test,
+        message = error_message,
+      })
+    end
+    return
+  end
+
+  -- Pattern: "Messages:" to get the additional message
+  local assert_message = line:match("Messages:%s*(.+)$")
+  if assert_message then
+    assert_message = assert_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
+    -- Associate with the most recent running test
+    local current_test = state.running_tests[#state.running_tests]
+    if current_test then
+      send({
+        type = "assert_message",
+        test_name = current_test,
+        message = assert_message,
+      })
+    end
+    return
+  end
+end
+
 ---@param params GoRunParams
 ---@param send fun(data: CmdData)
 ---@return integer
@@ -234,97 +347,25 @@ M.run = function(params, send)
   local env = vim.fn.environ()
   env = M.options.env and M.options.env(params.bufnr, env) or env
 
-  local current_out = ""
+  -- State for tracking running tests
+  local state = { running_tests = {} }
+
   local job = Job:new({
     command = bin,
     args = args,
     env = env,
     cwd = params.cwd,
     on_stdout = function(_, data)
-      --- @type boolean, GoLogEntry
-      local status, res = pcall(vim.json.decode, data)
-
-      if not status then
-        send({ type = "stdout", raw = data, output = data })
-        return
-      end
-
-      -- Handle individual test results
-      if res.Action == "run" and res.Test then
-        -- Send test started event when test begins running
-        send({
-          type = "test_started",
-          test_name = res.Test,
-          status = "running",
-        })
-      elseif res.Action == "fail" and res.Test then
-        -- Send test result without location (avoid fast event context)
-        send({
-          type = "test_result",
-          test_name = res.Test,
-          status = "failed",
-        })
-      elseif res.Action == "pass" and res.Test then
-        send({
-          type = "test_result",
-          test_name = res.Test,
-          status = "passed",
-        })
-      elseif res.Action == "skip" and res.Test then
-        send({
-          type = "test_result",
-          test_name = res.Test,
-          status = "skipped",
-        })
-      elseif res.Action == "output" and res.Test and res.Output then
-        -- Parse assert failure locations and messages from output
-        -- Pattern 2: "Error Trace:" with full path - most important for location
-        -- Pattern: "        \tError Trace:\t/path/file.go:123\n"
-        local full_path, line_str = res.Output:match("Error Trace:%s*\t([^:]+):(%d+)")
-        if full_path and line_str then
-          local line_no = tonumber(line_str)
-          send({
-            type = "assert_failure",
-            test_name = res.Test,
-            full_path = full_path,
-            line = line_no,
-            message = "",
-          })
-        end
-
-        -- Parse "Error:" field to get the main error message
-        -- Pattern: "        \tError:          Should be true\n"
-        local error_message = res.Output:match("Error:%s*([^\n]+)")
-        if error_message then
-          error_message = error_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
-          send({
-            type = "assert_error",
-            test_name = res.Test,
-            message = error_message,
-          })
-        end
-
-        -- Pattern 3: "Messages:" to get the additional message
-        -- Pattern: "        \tMessages:   \tmess\n"
-        local assert_message = res.Output:match("Messages:%s*\t([^\n]+)")
-        if assert_message then
-          send({
-            type = "assert_message",
-            test_name = res.Test,
-            message = assert_message:gsub("^%s+", ""):gsub("%s+$", ""), -- trim whitespace
-          })
+      -- Parse plain text output line by line
+      local lines = vim.split(data, "\n", { plain = true })
+      for _, line in ipairs(lines) do
+        if line ~= "" then
+          M.handle_output(line, send, params, state)
         end
       end
 
-      if res.Output and res.Output ~= "" then
-        current_out = current_out .. res.Output --[[@as string]]
-      end
-
-      if string.find(current_out, "\n") then
-        local out = current_out:gsub("\n", "")
-        current_out = ""
-        send({ type = "stdout", raw = data, decoded = res, output = out })
-      end
+      -- Send raw output for display
+      send({ type = "stdout", raw = data, output = data })
     end,
     on_stderr = function(_, data)
       send({ type = "stderr", raw = data, output = data })
@@ -368,30 +409,18 @@ M.after_run = function(params, results)
       -- Always update storage, with or without location (test was already marked finished in default strategy)
       -- This just updates the location if we found it
       storage.test_finished(result.test_name, "failed", nil, location)
-    end
 
-    -- Keep existing diagnostic logic for backward compatibility
-    if result.type == "stdout" then
-      --- @type GoLogEntry
-      local decoded = result.decoded
-
-      if not decoded then
-        return
-      end
-
-      if decoded.Action == "fail" then
-        local line_no = ts.get_func_def_line_no(params.bufnr, decoded.Test)
-
-        if line_no then
-          table.insert(diagnostics, {
-            lnum = line_no,
-            col = 0,
-            severity = vim.diagnostic.severity.ERROR,
-            message = "FAILED",
-            source = "Test",
-            user_data = "test",
-          })
-        end
+      -- Add diagnostic for failed test
+      local line_no = ts.get_func_def_line_no(params.bufnr, result.test_name)
+      if line_no then
+        table.insert(diagnostics, {
+          lnum = line_no,
+          col = 0,
+          severity = vim.diagnostic.severity.ERROR,
+          message = "FAILED",
+          source = "Test",
+          user_data = "test",
+        })
       end
     end
   end

@@ -4,18 +4,6 @@ local M = {
   name = "dap",
 }
 
--- Find test location using adapter method if available
----@param test_name string
----@param adapter any
----@param params any
----@return string?
-local function find_test_location_dap(test_name, adapter, params)
-  if adapter.find_test_location then
-    return adapter.find_test_location(test_name, params)
-  end
-  return nil
-end
-
 local default_test_name = "DAP Test"
 
 M.is_available = function()
@@ -44,110 +32,35 @@ M.run = function(adapter, params, config, opts)
   local output_path = vim.fn.tempname()
   local output_fd = nil
 
+  -- State for adapter's output handler
+  local output_state = { running_tests = {} }
+
+  -- Create wrapper send function that converts adapter events to storage calls
+  local function adapter_event_to_storage(event)
+    if event.type == "test_started" then
+      storage.test_started(event.test_name, event.location or "")
+    elseif event.type == "test_result" then
+      storage.test_finished(event.test_name, event.status, nil, event.location)
+    elseif event.type == "assert_failure" then
+      storage.assert_failure(event.test_name, event.full_path, event.line, event.message or "")
+    elseif event.type == "assert_error" then
+      storage.assert_error(event.test_name, event.message)
+    elseif event.type == "assert_message" then
+      storage.assert_message(event.test_name, event.message)
+    end
+  end
+
   local function write_output(data)
     table.insert(output_data, data)
     -- Also emit to storage
     storage.test_output("stdout", data)
 
-    -- Parse plain text Go test output format
-    -- Examples:
-    -- === RUN   TestServiceCancelDelivery
-    -- --- FAIL: TestServiceCancelDelivery (0.00s)
-    -- --- PASS: TestCreateCourierShift/successful_flow_with_successful_comment_creation (0.00s)
-
-    local lines = vim.split(data, "\n")
-    for _, line in ipairs(lines) do
-      -- Check for test start (=== RUN)
-      local run_test_name = line:match("^=== RUN%s+(.+)$")
-      if run_test_name then
-        -- Test started - create storage entry
-        local location = find_test_location_dap(run_test_name, adapter, params)
-        storage.test_started(run_test_name, location or "")
-      end
-
-      -- Check for test completion (--- PASS/FAIL/SKIP)
-      local test_name_pass = line:match("^%-%-%-%s+PASS:%s+([^%(]+)")
-      local test_name_fail = line:match("^%-%-%-%s+FAIL:%s+([^%(]+)")
-      local test_name_skip = line:match("^%-%-%-%s+SKIP:%s+([^%(]+)")
-
-      local status, test_name
-      if test_name_pass then
-        status = "passed"
-        test_name = test_name_pass
-      elseif test_name_fail then
-        status = "failed"
-        test_name = test_name_fail
-      elseif test_name_skip then
-        status = "skipped"
-        test_name = test_name_skip
-      end
-
-      if status and test_name then
-        -- Remove trailing whitespace from test_name
-        test_name = test_name:gsub("%s+$", "")
-
-        -- Find test location and update storage
-        local location = find_test_location_dap(test_name, adapter, params)
-        storage.test_finished(test_name, status, nil, location)
-      end
-
-      -- Parse assert failure locations and messages from output (same as Go adapter)
-
-      -- Pattern 2: "Error Trace:" with full path - most important for location
-      local full_path, line_str = line:match("Error Trace:%s*([^:]+):(%d+)")
-      if full_path and line_str then
-        local line_no = tonumber(line_str)
-        -- We need to associate this with the currently running test
-        -- Find the most recent test that started but hasn't finished yet
-        local current_test = nil
-        local results = storage.get_current_results()
-        for i = #results, 1, -1 do
-          if results[i].status == "running" then
-            current_test = results[i].name
-            break
-          end
-        end
-
-        if current_test then
-          storage.assert_failure(current_test, full_path, line_no, "")
-        end
-      end
-
-      -- Parse "Error:" field to get the main error message
-      local error_message = line:match("Error:%s*(.+)$")
-      if error_message then
-        error_message = error_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
-        -- Associate with the most recent test that started but hasn't finished yet
-        local current_test = nil
-        local results = storage.get_current_results()
-        for i = #results, 1, -1 do
-          if results[i].status == "running" then
-            current_test = results[i].name
-            break
-          end
-        end
-
-        if current_test then
-          storage.assert_error(current_test, error_message)
-        end
-      end
-
-      -- Pattern 3: "Messages:" to get the additional message
-      local assert_message = line:match("Messages:%s*(.+)$")
-      if assert_message then
-        assert_message = assert_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
-        -- Associate with the most recent test that has assert failures
-        local current_test = nil
-        local results = storage.get_current_results()
-        for i = #results, 1, -1 do
-          if results[i].assert_failures and #results[i].assert_failures > 0 then
-            current_test = results[i].name
-            break
-          end
-        end
-
-        if current_test then
-          storage.assert_message(current_test, assert_message)
+    -- Use adapter's handle_output if available, otherwise skip parsing
+    if adapter.handle_output then
+      local lines = vim.split(data, "\n", { plain = true })
+      for _, line in ipairs(lines) do
+        if line ~= "" then
+          adapter.handle_output(line, adapter_event_to_storage, params, output_state)
         end
       end
     end

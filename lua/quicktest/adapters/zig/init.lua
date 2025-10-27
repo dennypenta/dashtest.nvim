@@ -70,6 +70,11 @@ end
 ---@field cursor_pos integer[]
 ---@field opts AdapterRunOpts
 
+---@class ZigOutputState
+---@field current_failing_test string?
+---@field current_error_message string?
+---@field test_results table<string, string>
+
 ---@param bufnr integer
 ---@return string
 M.get_cwd = function(bufnr)
@@ -185,6 +190,84 @@ M.build_cmd = function(params)
   return args
 end
 
+---Parse a single line of Zig test plain text output and send structured events
+---@param line string
+---@param send fun(data: CmdData)
+---@param params ZigRunParams
+---@param state ZigOutputState
+M.handle_output = function(line, send, params, state)
+  -- Parse test failures
+  -- Format: error: 'test.test.failed test' failed: expected 5, found 4
+  local full_test_name, error_msg = line:match("error: '([^']+)' failed:%s*(.*)$")
+  if full_test_name then
+    -- Extract just the test name (remove the module prefix)
+    -- Format is typically: "module.test.test_name" or "test.test.test_name"
+    local test_name = full_test_name:match("%.test%.(.+)$") or full_test_name
+    state.current_failing_test = test_name
+    state.current_error_message = error_msg
+
+    -- Only send failure if we haven't already marked this test
+    if state.test_results[test_name] ~= "failed" then
+      -- Send test_started first if we haven't seen this test before
+      if not state.test_results[test_name] then
+        send({
+          type = "test_started",
+          test_name = test_name,
+          status = "running",
+        })
+      end
+      -- Then send test_result
+      send({
+        type = "test_result",
+        test_name = test_name,
+        status = "failed",
+      })
+      state.test_results[test_name] = "failed"
+    end
+    return
+  end
+
+  -- Parse test location from stack trace
+  -- Format: /path/to/test.zig:15:5: 0x100b5c857 in test.failed test (test)
+  -- This line comes after the error line, so we use current_failing_test
+  -- We match the line that contains the exact test name
+  if state.current_failing_test then
+    -- Only process lines that start with a path (stack trace lines)
+    -- Skip error lines that contain "error: "
+    if not line:match("^error: ") and line:match("^/") then
+      -- Escape special pattern characters in test name for matching
+      local escaped_test_name = state.current_failing_test:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
+      -- Match line that contains "in test.<exact_test_name>"
+      local pattern = "^([^:]+%.zig):(%d+):%d+:.* in test%." .. escaped_test_name .. " %("
+      local file_path, line_str = line:match(pattern)
+      if file_path and line_str then
+        local line_no = tonumber(line_str)
+
+        -- Send assert_failure event for quickfix list
+        send({
+          type = "assert_failure",
+          test_name = state.current_failing_test,
+          full_path = file_path,
+          line = line_no,
+          message = state.current_error_message or "",
+        })
+
+        -- Also send test_result with location
+        local location = file_path .. ":" .. line_str
+        send({
+          type = "test_result",
+          test_name = state.current_failing_test,
+          status = "failed",
+          location = location,
+        })
+
+        state.current_failing_test = nil -- Reset after finding location
+        state.current_error_message = nil
+      end
+    end
+  end
+end
+
 ---@param params ZigRunParams
 ---@param send fun(data: CmdData)
 ---@return integer
@@ -196,69 +279,19 @@ M.run = function(params, send)
   local env = vim.fn.environ()
   env = M.options.env and M.options.env(params.bufnr, env) or env
 
-  -- Track test results and current failing test for location parsing
-  local test_results = {}
+  -- State for tracking running tests
+  local state = { current_failing_test = nil, current_error_message = nil, test_results = {} }
   local all_output = {}
-  local current_failing_test = nil
 
   -- Helper function to parse test failures from output
   local function process_output(data)
     table.insert(all_output, data)
 
-    -- Parse test failures in real-time
-    -- Format: error: 'test.test.failed test' failed: expected 5, found 4
-    local full_test_name = data:match("error: '([^']+)' failed:")
-    if full_test_name then
-      -- Extract just the test name (remove the module prefix)
-      -- Format is typically: "module.test.test_name" or "test.test.test_name"
-      local test_name = full_test_name:match("%.test%.(.+)$") or full_test_name
-      current_failing_test = test_name
-
-      -- Only send failure if we haven't already marked this test
-      if test_results[test_name] ~= "failed" then
-        -- Send test_started first if we haven't seen this test before
-        if not test_results[test_name] then
-          send({
-            type = "test_started",
-            test_name = test_name,
-            status = "running",
-          })
-        end
-        -- Then send test_result
-        send({
-          type = "test_result",
-          test_name = test_name,
-          status = "failed",
-        })
-        test_results[test_name] = "failed"
-      end
-    end
-
-    -- Parse test location from stack trace
-    -- Format: /path/to/test.zig:15:5: 0x100b5c857 in test.failed test (test)
-    -- This line comes after the error line, so we use current_failing_test
-    -- We match the line that contains the exact test name
-    if current_failing_test then
-      -- Only process lines that start with a path (stack trace lines)
-      -- Skip error lines that contain "error: "
-      if not data:match("^error: ") and data:match("^/") then
-        -- Escape special pattern characters in test name for matching
-        local escaped_test_name = current_failing_test:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
-        -- Match line that contains "in test.<exact_test_name>"
-        local pattern = "^([^:]+%.zig):(%d+):%d+:.* in test%." .. escaped_test_name .. " %("
-        local file_path, line_str = data:match(pattern)
-        if file_path and line_str then
-          -- Found the test location
-          local location = file_path .. ":" .. line_str
-          -- Send location update for the current failing test
-          send({
-            type = "test_result",
-            test_name = current_failing_test,
-            status = "failed",
-            location = location,
-          })
-          current_failing_test = nil -- Reset after finding location
-        end
+    -- Parse output line by line using handle_output
+    local lines = vim.split(data, "\n", { plain = true })
+    for _, line in ipairs(lines) do
+      if line ~= "" then
+        M.handle_output(line, send, params, state)
       end
     end
 
@@ -288,7 +321,7 @@ M.run = function(params, send)
         status = "running",
         location = location,
       })
-      test_results[test_name] = "running"
+      state.test_results[test_name] = "running"
     end
   end
 
@@ -329,7 +362,7 @@ M.run = function(params, send)
           if #params.test_names > 0 then
             for _, test_name in ipairs(params.test_names) do
               -- Check if test is still "running" (not yet marked as failed/passed)
-              if test_results[test_name] == "running" then
+              if state.test_results[test_name] == "running" then
                 -- Find test location using treesitter
                 local location = nil
                 if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
@@ -346,7 +379,7 @@ M.run = function(params, send)
                   status = "passed",
                   location = location,
                 })
-                test_results[test_name] = "passed"
+                state.test_results[test_name] = "passed"
               end
             end
           else
@@ -355,7 +388,7 @@ M.run = function(params, send)
             local passed_count = passed_tests
             for i = 1, passed_count do
               local generic_name = "test_" .. i
-              if not test_results[generic_name] then
+              if not state.test_results[generic_name] then
                 -- Send test_started first
                 send({
                   type = "test_started",
@@ -368,7 +401,7 @@ M.run = function(params, send)
                   test_name = generic_name,
                   status = "passed",
                 })
-                test_results[generic_name] = "passed"
+                state.test_results[generic_name] = "passed"
               end
             end
           end

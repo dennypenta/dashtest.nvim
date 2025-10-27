@@ -44,7 +44,6 @@ function M.build_args(module, func_names, sub_func_names, additional_args)
   end
 
   table.insert(args, "-v")
-  table.insert(args, "-json")
 
   args = vim.list_extend(args, additional_args)
 
