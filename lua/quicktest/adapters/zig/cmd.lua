@@ -12,7 +12,7 @@ local function build_test_filter_args(test_names, test_filter_option)
   local filter_args = {}
   for _, test_name in ipairs(test_names) do
     -- Don't add quotes here - plenary.job passes args directly without shell parsing
-    table.insert(filter_args, string.format('-D%s="%s"', test_filter_option, test_name))
+    table.insert(filter_args, string.format("-D%s=%s", test_filter_option, test_name))
   end
 
   return filter_args
