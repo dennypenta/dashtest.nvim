@@ -47,23 +47,36 @@ end
 function M.update_quickfix()
   local results = storage.get_current_results()
   local qf_items = {}
-  
+
   for _, result in ipairs(results) do
     if result.status == "failed" then
-      -- Skip the main test entry (it has launch file location, not test-specific)
-      -- Individual tests have proper file:line locations
-      local filename, lnum = result.location:match("^(.+):(%d+)$")
-      if filename and lnum then
-        -- Only include entries with proper file:line format
-        lnum = tonumber(lnum) or 1
-        local qf_item = {
-          filename = filename,
-          lnum = lnum,
-          col = 1,
-          text = "Test failed: " .. result.name,
-          type = "E"
-        }
-        table.insert(qf_items, qf_item)
+      -- First, add assert failures if they exist
+      if result.assert_failures and #result.assert_failures > 0 then
+        for _, failure in ipairs(result.assert_failures) do
+          local qf_item = {
+            filename = failure.full_path,
+            lnum = failure.line,
+            col = 1,
+            text = result.name .. ": " .. (failure.error_message or failure.message or "Assertion failed"),
+            type = "E"
+          }
+          table.insert(qf_items, qf_item)
+        end
+      else
+        -- If no assert failures, fall back to test location
+        local filename, lnum = result.location:match("^(.+):(%d+)$")
+        if filename and lnum then
+          -- Only include entries with proper file:line format
+          lnum = tonumber(lnum) or 1
+          local qf_item = {
+            filename = filename,
+            lnum = lnum,
+            col = 1,
+            text = "Test failed: " .. result.name,
+            type = "E"
+          }
+          table.insert(qf_items, qf_item)
+        end
       end
     end
   end
