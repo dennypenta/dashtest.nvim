@@ -2,6 +2,7 @@ local ts = require("quicktest.adapters.golang.ts")
 local cmd = require("quicktest.adapters.golang.cmd")
 local fs = require("quicktest.fs_utils")
 local Job = require("plenary.job")
+local core = require("quicktest.strategies.core")
 
 ---@class GoAdapterOptions
 ---@field cwd (fun(bufnr: integer, current: string?): string)?
@@ -347,8 +348,9 @@ M.run = function(params, send)
   local env = vim.fn.environ()
   env = M.options.env and M.options.env(params.bufnr, env) or env
 
-  -- State for tracking running tests
-  local state = { running_tests = {} }
+  -- State for tracking running tests (unified structure from core.lua)
+  ---@type OutputState
+  local state = core.create_output_state()
 
   local job = Job:new({
     command = bin,

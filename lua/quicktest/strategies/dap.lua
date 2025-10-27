@@ -1,4 +1,5 @@
 local storage = require("quicktest.storage")
+local core = require("quicktest.strategies.core")
 
 local M = {
   name = "dap",
@@ -32,8 +33,9 @@ M.run = function(adapter, params, config, opts)
   local output_path = vim.fn.tempname()
   local output_fd = nil
 
-  -- State for adapter's output handler
-  local output_state = { running_tests = {} }
+  -- State for adapter's output handler (unified structure from core.lua)
+  ---@type OutputState
+  local output_state = core.create_output_state()
 
   -- Create wrapper send function that converts adapter events to storage calls
   local function adapter_event_to_storage(event)

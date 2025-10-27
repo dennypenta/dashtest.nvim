@@ -2,6 +2,7 @@ local ts = require("quicktest.adapters.zig.ts")
 local cmd = require("quicktest.adapters.zig.cmd")
 local fs = require("quicktest.fs_utils")
 local Job = require("plenary.job")
+local core = require("quicktest.strategies.core")
 
 ---@class ZigAdapterOptions
 ---@field cwd (fun(bufnr: integer, current: string?): string)?
@@ -224,11 +225,6 @@ M.handle_output = function(line, send, params, state)
     state.current_failing_test = test_name
     state.current_error_message = error_msg
 
-    -- Initialize test_results if it doesn't exist (e.g., when called from DAP)
-    if not state.test_results then
-      state.test_results = {}
-    end
-
     -- Only mark test as failed if we haven't already
     if state.test_results[test_name] ~= "failed" then
       -- Send test_started first if we haven't seen this test before
@@ -301,8 +297,9 @@ M.run = function(params, send)
   local env = vim.fn.environ()
   env = M.options.env and M.options.env(params.bufnr, env) or env
 
-  -- State for tracking running tests
-  local state = { current_failing_test = nil, current_error_message = nil, test_results = {} }
+  -- State for tracking running tests (unified structure from core.lua)
+  ---@type OutputState
+  local state = core.create_output_state()
   local all_output = {}
 
   -- Helper function to parse test failures from output
