@@ -5,19 +5,9 @@ local Job = require("plenary.job")
 local core = require("quicktest.strategies.core")
 local adapter_args = require("quicktest.adapters.args")
 
----@class ZigAdapterOptions
----@field cwd (fun(bufnr: integer, current: string?): string)?
----@field bin (fun(bufnr: integer, current: string?): string)?
----@field additional_args (fun(bufnr: integer): string[])?
----@field args (fun(bufnr: integer, current: string[]): string[])?
----@field env (fun(bufnr: integer, current: table<string, string>): table<string, string>)?
----@field is_enabled (fun(bufnr: integer, type: RunType, current: boolean): boolean)?
----@field test_filter_option (fun(bufnr: integer, current: string): string)?
----@field dap (fun(bufnr: integer, params: ZigRunParams): table)?
-
 local M = {
   name = "zig",
-  ---@type ZigAdapterOptions
+  ---@type AdapterOptions
   options = {},
 }
 
@@ -82,11 +72,7 @@ end
 ---@field bufnr integer
 ---@field cursor_pos integer[]
 ---@field opts AdapterRunOpts
-
----@class ZigOutputState
----@field current_failing_test string?
----@field current_error_message string?
----@field test_results table<string, string>
+---@field output_state OutputState
 
 ---@param bufnr integer
 ---@return string
@@ -203,8 +189,7 @@ end
 ---@param line string
 ---@param send fun(data: CmdData)
 ---@param params ZigRunParams
----@param state ZigOutputState
-M.handle_output = function(line, send, params, state)
+M.handle_output = function(line, send, params)
   -- Strip ANSI color codes for reliable parsing (especially in DAP mode)
   local clean_line = strip_ansi_codes(line)
 
@@ -217,13 +202,13 @@ M.handle_output = function(line, send, params, state)
     -- Extract just the test name (remove the module prefix)
     -- Format is typically: "module.test.test_name" or "test.test.test_name"
     local test_name = full_test_name:match("%.test%.(.+)$") or full_test_name
-    state.current_failing_test = test_name
-    state.current_error_message = error_msg
+    params.output_state.current_failing_test = test_name
+    params.output_state.current_error_message = error_msg
 
     -- Only mark test as failed if we haven't already
-    if state.test_results[test_name] ~= "failed" then
+    if params.output_state.test_results[test_name] ~= "failed" then
       -- Send test_started first if we haven't seen this test before
-      if not state.test_results[test_name] then
+      if not params.output_state.test_results[test_name] then
         send({
           type = "test_started",
           test_name = test_name,
@@ -231,7 +216,7 @@ M.handle_output = function(line, send, params, state)
         })
       end
       -- Don't send test_result yet - wait for stack trace to get location
-      state.test_results[test_name] = "failed"
+      params.output_state.test_results[test_name] = "failed"
     end
     return
   end
@@ -240,11 +225,11 @@ M.handle_output = function(line, send, params, state)
   -- Format: /path/to/test.zig:15:5: 0x100b5c857 in test.failed test (test)
   -- This line comes after the FAIL line, so we use current_failing_test
   -- We match the line that contains the exact test name
-  if state.current_failing_test then
+  if params.output_state.current_failing_test then
     -- Only process lines that start with a path (stack trace lines)
     if clean_line:match("^/") then
       -- Escape special pattern characters in test name for matching
-      local escaped_test_name = state.current_failing_test:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
+      local escaped_test_name = params.output_state.current_failing_test:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
       -- Match line that contains "in test.<exact_test_name>"
       local pattern = "^([^:]+%.zig):(%d+):%d+:.* in test%." .. escaped_test_name .. " %("
       local file_path, line_str = clean_line:match(pattern)
@@ -254,28 +239,28 @@ M.handle_output = function(line, send, params, state)
         -- Send assert_failure event for quickfix list
         send({
           type = "assert_failure",
-          test_name = state.current_failing_test,
+          test_name = params.output_state.current_failing_test,
           full_path = file_path,
           line = line_no,
-          message = state.current_error_message or "",
+          message = params.output_state.current_error_message or "",
         })
 
         -- Also send test_result with location
         local location = file_path .. ":" .. line_str
         send({
           type = "test_result",
-          test_name = state.current_failing_test,
+          test_name = params.output_state.current_failing_test,
           status = "failed",
           location = location,
         })
 
         -- Mark that we've sent the test_result
-        if state.test_results then
-          state.test_results[state.current_failing_test .. "_result_sent"] = true
+        if params.output_state.test_results then
+          params.output_state.test_results[params.output_state.current_failing_test .. "_result_sent"] = true
         end
 
-        state.current_failing_test = nil -- Reset after finding location
-        state.current_error_message = nil
+        params.output_state.current_failing_test = nil -- Reset after finding location
+        params.output_state.current_error_message = nil
       end
     end
   end
@@ -353,7 +338,8 @@ M.run = function(params, send)
 
         -- Extract test counts
         -- Format: "1 passed; 0 skipped; 2 failed."
-        local passed_tests, skipped_tests, failed_tests = clean_output:match("(%d+) passed; (%d+) skipped; (%d+) failed%.")
+        local passed_tests, skipped_tests, failed_tests =
+          clean_output:match("(%d+) passed; (%d+) skipped; (%d+) failed%.")
         local total_tests = nil
 
         if passed_tests then
@@ -454,7 +440,6 @@ M.title = function(params)
   return "Running test: " .. table.concat(args, " ")
 end
 
-
 ---@param bufnr integer
 ---@param type RunType
 ---@return boolean
@@ -510,18 +495,6 @@ M.build_dap_config = function(bufnr, params)
   return config
 end
 
---- Adapter options.
-setmetatable(M, {
-  ---@param opts ZigAdapterOptions
-  __call = function(_, opts)
-    opts = opts or {}
-    if opts.dap == nil then
-      opts.dap = default_dap_opt
-    end
-    M.options = opts
-
-    return M
-  end,
-})
+adapter_args.setmeta(M)
 
 return M

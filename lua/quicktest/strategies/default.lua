@@ -104,7 +104,7 @@ M.run = function(adapter, params, config, opts)
           for _, line in ipairs(lines) do
             if line ~= "" then
               -- Adapter will emit events via sender, which will be processed by handlers below
-              adapter.handle_output(line, sender.send, params, params.output_state)
+              adapter.handle_output(line, sender.send, params)
             end
           end
         end

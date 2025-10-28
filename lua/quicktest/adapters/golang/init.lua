@@ -5,28 +5,11 @@ local Job = require("plenary.job")
 local core = require("quicktest.strategies.core")
 local adapter_args = require("quicktest.adapters.args")
 
----@class GoAdapterOptions
----@field cwd (fun(bufnr: integer, current: string?): string)?
----@field bin (fun(bufnr: integer, current: string?): string)?
----@field additional_args (fun(bufnr: integer): string[])?
----@field args (fun(bufnr: integer, current: string[]): string[])?
----@field env (fun(bufnr: integer, current: table<string, string>): table<string, string>)?
----@field is_enabled (fun(bufnr: integer, type: RunType, current: boolean): boolean)?
----@field dap (fun(bufnr: integer, params: GoRunParams): table)?
-
 local M = {
   name = "go",
-  ---@type GoAdapterOptions
+  ---@type AdapterOptions
   options = {},
 }
-
-local default_dap_opt = function(bufnr, params)
-  return {
-    showLog = true,
-    logLevel = "debug",
-    dlvToolPath = vim.fn.exepath("dlv"),
-  }
-end
 
 --- @param bufnr integer
 --- @return string | nil
@@ -89,14 +72,6 @@ local function get_module_path(cwd, bufnr)
   end
 end
 
----@class GoLogEntry
----@field Action '"start"' | '"run"' | '"pause"' | '"cont"' | '"pass"' | '"bench"' | '"fail"' | '"output"' | '"skip"'
----@field Package string
----@field Time string
----@field Test? string
----@field Output? string
----@field Elapsed? number
-
 ---@class GoRunParams
 ---@field func_names string[]
 ---@field sub_func_names string[]
@@ -105,9 +80,7 @@ end
 ---@field bufnr integer
 ---@field cursor_pos integer[]
 ---@field opts AdapterRunOpts
-
----@class GoOutputState
----@field running_tests string[]
+---@field output_state OutputState
 
 ---@param bufnr integer
 ---@return string
@@ -221,17 +194,25 @@ M.build_dir_run_params = function(bufnr, cursor_pos, opts)
     nil
 end
 
+---@param params GoRunParams
+---@return string[]
+M.build_cmd = function(params)
+  local additional_args = adapter_args.merge_additional_args(M.options, params.bufnr, params.opts)
+  local args = cmd.build_args(params.module, params.func_names, params.sub_func_names, additional_args)
+  args = M.options.args and M.options.args(params.bufnr, args) or args
+  return args
+end
+
 ---Parse a single line of Go test plain text output and send structured events
 ---@param line string
 ---@param send fun(data: CmdData)
 ---@param params GoRunParams
----@param state GoOutputState
-M.handle_output = function(line, send, params, state)
+M.handle_output = function(line, send, params)
   -- Check for test start (=== RUN)
   local run_test_name = line:match("^=== RUN%s+(.+)$")
   if run_test_name then
     -- Test started - track it and send event
-    table.insert(state.running_tests, run_test_name)
+    table.insert(params.output_state.running_tests, run_test_name)
 
     -- Find test location for navigation
     local location = M.find_test_location(run_test_name, params)
@@ -267,9 +248,9 @@ M.handle_output = function(line, send, params, state)
     test_name = test_name:gsub("%s+$", "")
 
     -- Remove from running tests
-    for i, running_test in ipairs(state.running_tests) do
+    for i, running_test in ipairs(params.output_state.running_tests) do
       if running_test == test_name then
-        table.remove(state.running_tests, i)
+        table.remove(params.output_state.running_tests, i)
         break
       end
     end
@@ -294,7 +275,7 @@ M.handle_output = function(line, send, params, state)
   if full_path and line_str then
     local line_no = tonumber(line_str)
     -- Associate with the most recent running test
-    local current_test = state.running_tests[#state.running_tests]
+    local current_test = params.output_state.running_tests[#params.output_state.running_tests]
     if current_test then
       send({
         type = "assert_failure",
@@ -312,7 +293,7 @@ M.handle_output = function(line, send, params, state)
   if error_message then
     error_message = error_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
     -- Associate with the most recent running test
-    local current_test = state.running_tests[#state.running_tests]
+    local current_test = params.output_state.running_tests[#params.output_state.running_tests]
     if current_test then
       send({
         type = "assert_error",
@@ -328,7 +309,7 @@ M.handle_output = function(line, send, params, state)
   if assert_message then
     assert_message = assert_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
     -- Associate with the most recent running test
-    local current_test = state.running_tests[#state.running_tests]
+    local current_test = params.output_state.running_tests[#params.output_state.running_tests]
     if current_test then
       send({
         type = "assert_message",
@@ -344,9 +325,7 @@ end
 ---@param send fun(data: CmdData)
 ---@return integer
 M.run = function(params, send)
-  local additional_args = adapter_args.merge_additional_args(M.options, params.bufnr, params.opts)
-  local args = cmd.build_args(params.module, params.func_names, params.sub_func_names, additional_args)
-  args = M.options.args and M.options.args(params.bufnr, args) or args
+  local args = M.build_cmd(params)
 
   local bin = M.get_bin(params.bufnr)
 
@@ -482,18 +461,6 @@ M.build_dap_config = function(bufnr, params)
   return config
 end
 
---- Adapter options.
-setmetatable(M, {
-  ---@param opts GoAdapterOptions
-  __call = function(_, opts)
-    opts = opts or {}
-    if opts.dap == nil then
-      opts.dap = default_dap_opt
-    end
-    M.options = opts
-
-    return M
-  end,
-})
+adapter_args.setmeta(M)
 
 return M

@@ -35,7 +35,7 @@ M.run = function(adapter, params, config, opts)
 
   -- State for adapter's output handler (unified structure from core.lua)
   ---@type OutputState
-  local output_state = core.create_output_state()
+  params.output_state = core.create_output_state()
 
   -- Create wrapper send function that converts adapter events to storage calls
   local function adapter_event_to_storage(event)
@@ -62,7 +62,7 @@ M.run = function(adapter, params, config, opts)
       local lines = vim.split(data, "\n", { plain = true })
       for _, line in ipairs(lines) do
         if line ~= "" then
-          adapter.handle_output(line, adapter_event_to_storage, params, output_state)
+          adapter.handle_output(line, adapter_event_to_storage, params)
         end
       end
     end
