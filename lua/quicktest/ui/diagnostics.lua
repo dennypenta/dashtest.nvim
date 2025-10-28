@@ -33,9 +33,9 @@ return function(opts)
       if event_type == "run_started" then
         -- Clear all diagnostics for new run
         M.clear_all()
-      elseif event_type == "test_finished" and data.status == "failed" then
-        -- Only update diagnostics when tests are completely done
-        -- Check if this is the last test (no more running tests)
+      elseif event_type == "test_finished" then
+        -- Update diagnostics when all tests are completely done (regardless of pass/fail)
+        -- This ensures we refresh diagnostics to match current storage state
         local summary = storage.get_run_summary()
         if summary.running == 0 then
           M.update_all_open_buffers()
@@ -94,6 +94,7 @@ return function(opts)
     local results = storage.get_current_results()
 
     for _, result in ipairs(results) do
+      -- Add diagnostics for assert failures (at exact assertion line)
       if result.assert_failures then
         for _, failure in ipairs(result.assert_failures) do
           if failure.full_path == file_path then
@@ -125,6 +126,26 @@ return function(opts)
             }
             table.insert(diagnostics, diagnostic)
           end
+        end
+      end
+
+      -- Add diagnostic for failed test (at test function definition line)
+      if result.status == "failed" and result.location then
+        -- Parse location format: "file_path:line_number"
+        local test_file_path, line_str = result.location:match("^([^:]+):(%d+)$")
+        if test_file_path and line_str and test_file_path == file_path then
+          local diagnostic = {
+            lnum = tonumber(line_str) - 1, -- Convert to 0-based
+            col = 0,
+            severity = vim.diagnostic.severity.ERROR,
+            message = "FAILED",
+            source = "quicktest",
+            user_data = {
+              test_name = result.name,
+              type = "test_failure",
+            },
+          }
+          table.insert(diagnostics, diagnostic)
         end
       end
     end

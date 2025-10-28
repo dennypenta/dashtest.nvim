@@ -91,6 +91,8 @@ function M.jump_to_test(test, callback)
     vim.api.nvim_win_call(target_win, function()
       vim.cmd("edit " .. vim.fn.fnameescape(file))
 
+      local bufnr = vim.api.nvim_get_current_buf()
+
       -- If no specific line number, try to find the test function
       if line == 1 and test and test.name then
         local test_name = test.name
@@ -109,7 +111,16 @@ function M.jump_to_test(test, callback)
         end
       end
 
-      vim.api.nvim_win_set_cursor(target_win, { line, 0 })
+      -- Validate line number is within buffer bounds
+      local line_count = vim.api.nvim_buf_line_count(bufnr)
+      if line > line_count then
+        line = line_count
+      end
+      if line < 1 then
+        line = 1
+      end
+
+      vim.api.nvim_win_set_cursor(0, { line, 0 })
     end)
 
     -- Focus the target window

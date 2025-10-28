@@ -98,21 +98,31 @@ M.run = function(adapter, params, config, opts)
         end
       elseif result.type == "stdout" and result.output then
         storage.test_output("stdout", result.output)
+        -- Let adapter parse output line by line if it has handle_output
+        if adapter.handle_output and params.output_state then
+          local lines = vim.split(result.output, "\n", { plain = true })
+          for _, line in ipairs(lines) do
+            if line ~= "" then
+              -- Adapter will emit events via sender, which will be processed by handlers below
+              adapter.handle_output(line, sender.send, params, params.output_state)
+            end
+          end
+        end
       elseif result.type == "stderr" and result.output then
         storage.test_output("stderr", result.output)
       elseif result.type == "test_started" then
         -- Handle individual test start from adapter
-        -- Find location using adapter method if available
-        local location = ""
-        if adapter.find_test_location then
+        -- Use location from event if provided, otherwise try to find it
+        local location = result.location or ""
+        if location == "" and adapter.find_test_location then
           location = adapter.find_test_location(result.test_name, params) or ""
         end
         storage.test_started(result.test_name, location)
       elseif result.type == "test_result" then
         -- Handle individual test results from adapter
-        -- Find location using adapter method if available
-        local location = ""
-        if adapter.find_test_location then
+        -- Use location from event if provided, otherwise try to find it
+        local location = result.location or ""
+        if location == "" and adapter.find_test_location then
           location = adapter.find_test_location(result.test_name, params) or ""
         end
         -- Mark test as finished (it should already exist from test_started)

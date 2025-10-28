@@ -3,6 +3,7 @@ local cmd = require("quicktest.adapters.golang.cmd")
 local fs = require("quicktest.fs_utils")
 local Job = require("plenary.job")
 local core = require("quicktest.strategies.core")
+local adapter_args = require("quicktest.adapters.args")
 
 ---@class GoAdapterOptions
 ---@field cwd (fun(bufnr: integer, current: string?): string)?
@@ -26,8 +27,6 @@ local default_dap_opt = function(bufnr, params)
     dlvToolPath = vim.fn.exepath("dlv"),
   }
 end
-
-local ns = vim.api.nvim_create_namespace("quicktest-go")
 
 --- @param bufnr integer
 --- @return string | nil
@@ -233,10 +232,15 @@ M.handle_output = function(line, send, params, state)
   if run_test_name then
     -- Test started - track it and send event
     table.insert(state.running_tests, run_test_name)
+
+    -- Find test location for navigation
+    local location = M.find_test_location(run_test_name, params)
+
     send({
       type = "test_started",
       test_name = run_test_name,
       status = "running",
+      location = location,
     })
     return
   end
@@ -270,11 +274,15 @@ M.handle_output = function(line, send, params, state)
       end
     end
 
-    -- Send event without location (location will be added in after_run)
+    -- Find test location for navigation and diagnostics
+    local location = M.find_test_location(test_name, params)
+
+    -- Send event with location
     send({
       type = "test_result",
       test_name = test_name,
       status = status,
+      location = location,
     })
     return
   end
@@ -336,21 +344,16 @@ end
 ---@param send fun(data: CmdData)
 ---@return integer
 M.run = function(params, send)
-  local additional_args = M.options.additional_args and M.options.additional_args(params.bufnr) or {}
-  additional_args = params.opts.additional_args and vim.list_extend(additional_args, params.opts.additional_args)
-    or additional_args
-
+  local additional_args = adapter_args.merge_additional_args(M.options, params.bufnr, params.opts)
   local args = cmd.build_args(params.module, params.func_names, params.sub_func_names, additional_args)
   args = M.options.args and M.options.args(params.bufnr, args) or args
 
   local bin = M.get_bin(params.bufnr)
 
-  local env = vim.fn.environ()
-  env = M.options.env and M.options.env(params.bufnr, env) or env
+  local env = adapter_args.merge_env(M.options, params.bufnr)
 
-  -- State for tracking running tests (unified structure from core.lua)
-  ---@type OutputState
-  local state = core.create_output_state()
+  -- Create output state for handle_output (strategy will use this)
+  params.output_state = core.create_output_state()
 
   local job = Job:new({
     command = bin,
@@ -358,15 +361,6 @@ M.run = function(params, send)
     env = env,
     cwd = params.cwd,
     on_stdout = function(_, data)
-      -- Parse plain text output line by line
-      local lines = vim.split(data, "\n", { plain = true })
-      for _, line in ipairs(lines) do
-        if line ~= "" then
-          M.handle_output(line, send, params, state)
-        end
-      end
-
-      -- Send raw output for display
       send({ type = "stdout", raw = data, output = data })
     end,
     on_stderr = function(_, data)
@@ -386,48 +380,11 @@ M.run = function(params, send)
 end
 
 M.title = function(params)
-  local additional_args = M.options.additional_args and M.options.additional_args(params.bufnr) or {}
-  additional_args = params.opts.additional_args and vim.list_extend(additional_args, params.opts.additional_args)
-    or additional_args
-
+  local additional_args = adapter_args.merge_additional_args(M.options, params.bufnr, params.opts)
   local args = cmd.build_args(params.module, params.func_names, params.sub_func_names, additional_args)
   args = M.options.args and M.options.args(params.bufnr, args) or args
 
   return "Running test: " .. table.concat({ unpack(args, 2) }, " ")
-end
-
----@param params GoRunParams
----@param results CmdData[]
-M.after_run = function(params, results)
-  local diagnostics = {}
-  local storage = require("quicktest.storage")
-
-  -- Process test results and update storage with precise locations
-  for _, result in ipairs(results) do
-    if result.type == "test_result" and result.status == "failed" then
-      -- Find the actual test file and line using adapter method
-      local location = M.find_test_location(result.test_name, params)
-
-      -- Always update storage, with or without location (test was already marked finished in default strategy)
-      -- This just updates the location if we found it
-      storage.test_finished(result.test_name, "failed", nil, location)
-
-      -- Add diagnostic for failed test
-      local line_no = ts.get_func_def_line_no(params.bufnr, result.test_name)
-      if line_no then
-        table.insert(diagnostics, {
-          lnum = line_no,
-          col = 0,
-          severity = vim.diagnostic.severity.ERROR,
-          message = "FAILED",
-          source = "Test",
-          user_data = "test",
-        })
-      end
-    end
-  end
-
-  vim.diagnostic.set(ns, params.bufnr, diagnostics, {})
 end
 
 ---@param bufnr integer
@@ -503,14 +460,9 @@ M.build_dap_config = function(bufnr, params)
     return
   end
 
-  local additional_args = M.options.additional_args and M.options.additional_args(bufnr) or {}
-  additional_args = params.opts.additional_args and vim.list_extend(additional_args, params.opts.additional_args)
-    or additional_args
-
+  local additional_args = adapter_args.merge_additional_args(M.options, bufnr, params.opts)
   local test_args = cmd.build_dap_args(params.func_names, params.sub_func_names, additional_args)
-
-  local env = vim.fn.environ()
-  env = M.options.env and M.options.env(bufnr, env) or env
+  local env = adapter_args.merge_env(M.options, bufnr)
 
   local config = {
     type = "go",

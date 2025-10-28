@@ -3,6 +3,7 @@ local cmd = require("quicktest.adapters.zig.cmd")
 local fs = require("quicktest.fs_utils")
 local Job = require("plenary.job")
 local core = require("quicktest.strategies.core")
+local adapter_args = require("quicktest.adapters.args")
 
 ---@class ZigAdapterOptions
 ---@field cwd (fun(bufnr: integer, current: string?): string)?
@@ -26,8 +27,6 @@ local default_dap_opt = function(bufnr, params)
     logLevel = "debug",
   }
 end
-
-local ns = vim.api.nvim_create_namespace("quicktest-zig")
 
 --- Strip ANSI color codes from a string
 --- @param str string
@@ -193,12 +192,8 @@ end
 ---@param params ZigRunParams
 ---@return string[]
 M.build_cmd = function(params)
-  local additional_args = M.options.additional_args and M.options.additional_args(params.bufnr) or {}
-  additional_args = params.opts.additional_args and vim.list_extend(additional_args, params.opts.additional_args)
-    or additional_args
-
+  local additional_args = adapter_args.merge_additional_args(M.options, params.bufnr, params.opts)
   local test_filter_option = M.get_test_filter_option(params.bufnr)
-
   local args = cmd.build_args(params.opts.cmd_override, params.test_names, additional_args, test_filter_option)
   args = M.options.args and M.options.args(params.bufnr, args) or args
   return args
@@ -293,30 +288,22 @@ M.run = function(params, send)
   local args = M.build_cmd(params)
 
   local bin = M.get_bin(params.bufnr)
+  local env = adapter_args.merge_env(M.options, params.bufnr)
 
-  local env = vim.fn.environ()
-  env = M.options.env and M.options.env(params.bufnr, env) or env
-
-  -- State for tracking running tests (unified structure from core.lua)
-  ---@type OutputState
+  -- Create output state for handle_output (strategy will use this, and we use it in on_exit)
   local state = core.create_output_state()
+  params.output_state = state
+
   local all_output = {}
 
-  -- Helper function to parse test failures from output
+  -- Helper function to collect output
   local function process_output(data)
     table.insert(all_output, data)
-
-    -- Parse output line by line using handle_output
-    local lines = vim.split(data, "\n", { plain = true })
-    for _, line in ipairs(lines) do
-      if line ~= "" then
-        M.handle_output(line, send, params, state)
-      end
-    end
 
     -- Always send as "stdout" so the colorizer can parse ANSI codes properly
     -- The UI treats "stderr" as errors and highlights everything in red,
     -- stripping ANSI codes. By sending as "stdout", we get proper color parsing.
+    -- The strategy will handle line-by-line parsing via handle_output.
     send({ type = "stdout", raw = data, output = data })
   end
 
@@ -467,84 +454,6 @@ M.title = function(params)
   return "Running test: " .. table.concat(args, " ")
 end
 
----@param params ZigRunParams
----@param results CmdData[]
-M.after_run = function(params, results)
-  local diagnostics = {}
-  local storage = require("quicktest.storage")
-
-  -- Collect all output for parsing
-  local full_output = {}
-  for _, result in ipairs(results) do
-    if result.type == "stdout" or result.type == "stderr" then
-      table.insert(full_output, result.output)
-    end
-  end
-
-  local output_text = table.concat(full_output, "\n")
-  -- Strip ANSI codes for reliable parsing
-  local clean_output = strip_ansi_codes(output_text)
-
-  -- Parse Zig test output to find failed tests
-  local failed_tests = {}
-  local current_failing_test = nil
-
-  for line in clean_output:gmatch("[^\r\n]+") do
-    -- Check if this is a test failure line
-    -- Format: 2/3 server_test.test.11...FAIL (Jo)
-    -- Note: Line may end with \r (carriage return)
-    local full_test_name = line:match("^%d+/%d+ (.-)%.%.%.FAIL %((.+)%)%s*$")
-    if full_test_name then
-      -- Extract just the test name (remove the module prefix)
-      -- Format is typically: "module.test.test_name" or "test.test.test_name"
-      current_failing_test = full_test_name:match("%.test%.(.+)$") or full_test_name
-    end
-
-    -- Then, look for stack trace lines that match the test
-    -- Stack trace format: /path/to/test.zig:15:5: 0x100d58857 in test.failed test (test)
-    if current_failing_test and line:match("^/") then
-      -- Escape special pattern characters in test name for matching
-      local escaped_test_name = current_failing_test:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
-      -- Match line that contains "in test.<exact_test_name>"
-      local pattern = "^([^:]+%.zig):(%d+):%d+:.* in test%." .. escaped_test_name .. " %("
-      local file_path, line_str = line:match(pattern)
-
-      if file_path and line_str then
-        local line_no = tonumber(line_str)
-
-        table.insert(failed_tests, {
-          test_name = current_failing_test,
-          file_path = file_path,
-          line = line_no,
-        })
-
-        -- Update storage with failure location
-        storage.test_finished(current_failing_test, "failed", nil, file_path .. ":" .. line_no)
-
-        current_failing_test = nil -- Reset after finding location
-      end
-    end
-  end
-
-  -- Add diagnostics for failed tests in the current buffer
-  for _, failed in ipairs(failed_tests) do
-    -- Try to find the test in the current buffer
-    local line_no = ts.get_test_def_line_no(params.bufnr, failed.test_name)
-
-    if line_no then
-      table.insert(diagnostics, {
-        lnum = line_no,
-        col = 0,
-        severity = vim.diagnostic.severity.ERROR,
-        message = "FAILED",
-        source = "Test",
-        user_data = "test",
-      })
-    end
-  end
-
-  vim.diagnostic.set(ns, params.bufnr, diagnostics, {})
-end
 
 ---@param bufnr integer
 ---@param type RunType
@@ -575,12 +484,8 @@ end
 ---@param params ZigRunParams
 ---@return table?
 M.build_dap_config = function(bufnr, params)
-  local additional_args = M.options.additional_args and M.options.additional_args(bufnr) or {}
-  additional_args = params.opts.additional_args and vim.list_extend(additional_args, params.opts.additional_args)
-    or additional_args
-
-  local env = vim.fn.environ()
-  env = M.options.env and M.options.env(bufnr, env) or env
+  local additional_args = adapter_args.merge_additional_args(M.options, bufnr, params.opts)
+  local env = adapter_args.merge_env(M.options, bufnr)
 
   -- For Zig, we need to use the LLDB adapter
   local config = {
