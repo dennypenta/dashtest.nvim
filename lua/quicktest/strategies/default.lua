@@ -2,6 +2,7 @@ local storage = require("quicktest.storage")
 local notify = require("quicktest.notify")
 local a = require("plenary.async")
 local u = require("plenary.async.util")
+local core = require("quicktest.strategies.core")
 
 local M = {
   name = "default",
@@ -48,6 +49,8 @@ M.run = function(adapter, params, config, opts)
   local is_running = function()
     return current_job and job.id == current_job.id
   end
+
+  params.output_state = core.create_output_state()
 
   local runLoop = function()
     local sender, receiver = a.control.channel.mpsc()

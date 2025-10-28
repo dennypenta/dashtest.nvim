@@ -2,7 +2,6 @@ local ts = require("quicktest.adapters.golang.ts")
 local cmd = require("quicktest.adapters.golang.cmd")
 local fs = require("quicktest.fs_utils")
 local Job = require("plenary.job")
-local core = require("quicktest.strategies.core")
 local adapter_args = require("quicktest.adapters.args")
 
 local M = {
@@ -75,8 +74,8 @@ end
 ---@class GoRunParams
 ---@field func_names string[]
 ---@field sub_func_names string[]
----@field cwd string
 ---@field module string
+---@field cwd string
 ---@field bufnr integer
 ---@field cursor_pos integer[]
 ---@field opts AdapterRunOpts
@@ -212,7 +211,10 @@ M.handle_output = function(line, send, params)
   local run_test_name = line:match("^=== RUN%s+(.+)$")
   if run_test_name then
     -- Test started - track it and send event
-    table.insert(params.output_state.running_tests, run_test_name)
+    table.insert(params.output_state.tests_progress, {
+      name = run_test_name,
+      status = "running",
+    })
 
     -- Find test location for navigation
     local location = M.find_test_location(run_test_name, params)
@@ -247,14 +249,6 @@ M.handle_output = function(line, send, params)
     -- Remove trailing whitespace from test_name
     test_name = test_name:gsub("%s+$", "")
 
-    -- Remove from running tests
-    for i, running_test in ipairs(params.output_state.running_tests) do
-      if running_test == test_name then
-        table.remove(params.output_state.running_tests, i)
-        break
-      end
-    end
-
     -- Find test location for navigation and diagnostics
     local location = M.find_test_location(test_name, params)
 
@@ -265,6 +259,14 @@ M.handle_output = function(line, send, params)
       status = status,
       location = location,
     })
+
+    -- Remove completed test from state (no longer needed for parsing)
+    for i, test_result in ipairs(params.output_state.tests_progress) do
+      if test_result.name == test_name then
+        table.remove(params.output_state.tests_progress, i)
+        break
+      end
+    end
     return
   end
 
@@ -275,7 +277,13 @@ M.handle_output = function(line, send, params)
   if full_path and line_str then
     local line_no = tonumber(line_str)
     -- Associate with the most recent running test
-    local current_test = params.output_state.running_tests[#params.output_state.running_tests]
+    local current_test = nil
+    for i = #params.output_state.tests_progress, 1, -1 do
+      if params.output_state.tests_progress[i].status == "running" then
+        current_test = params.output_state.tests_progress[i].name
+        break
+      end
+    end
     if current_test then
       send({
         type = "assert_failure",
@@ -293,7 +301,13 @@ M.handle_output = function(line, send, params)
   if error_message then
     error_message = error_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
     -- Associate with the most recent running test
-    local current_test = params.output_state.running_tests[#params.output_state.running_tests]
+    local current_test = nil
+    for i = #params.output_state.tests_progress, 1, -1 do
+      if params.output_state.tests_progress[i].status == "running" then
+        current_test = params.output_state.tests_progress[i].name
+        break
+      end
+    end
     if current_test then
       send({
         type = "assert_error",
@@ -309,7 +323,13 @@ M.handle_output = function(line, send, params)
   if assert_message then
     assert_message = assert_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
     -- Associate with the most recent running test
-    local current_test = params.output_state.running_tests[#params.output_state.running_tests]
+    local current_test = nil
+    for i = #params.output_state.tests_progress, 1, -1 do
+      if params.output_state.tests_progress[i].status == "running" then
+        current_test = params.output_state.tests_progress[i].name
+        break
+      end
+    end
     if current_test then
       send({
         type = "assert_message",
@@ -330,9 +350,6 @@ M.run = function(params, send)
   local bin = M.get_bin(params.bufnr)
 
   local env = adapter_args.merge_env(M.options, params.bufnr)
-
-  -- Create output state for handle_output (strategy will use this)
-  params.output_state = core.create_output_state()
 
   local job = Job:new({
     command = bin,

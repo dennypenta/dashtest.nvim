@@ -2,7 +2,6 @@ local ts = require("quicktest.adapters.zig.ts")
 local cmd = require("quicktest.adapters.zig.cmd")
 local fs = require("quicktest.fs_utils")
 local Job = require("plenary.job")
-local core = require("quicktest.strategies.core")
 local adapter_args = require("quicktest.adapters.args")
 
 local M = {
@@ -10,13 +9,6 @@ local M = {
   ---@type AdapterOptions
   options = {},
 }
-
-local default_dap_opt = function(bufnr, params)
-  return {
-    showLog = true,
-    logLevel = "debug",
-  }
-end
 
 --- Strip ANSI color codes from a string
 --- @param str string
@@ -205,19 +197,89 @@ M.handle_output = function(line, send, params)
     params.output_state.current_failing_test = test_name
     params.output_state.current_error_message = error_msg
 
+    -- Find test in results array
+    local test_result = nil
+    for _, tr in ipairs(params.output_state.tests_progress) do
+      if tr.name == test_name then
+        test_result = tr
+        break
+      end
+    end
+
     -- Only mark test as failed if we haven't already
-    if params.output_state.test_results[test_name] ~= "failed" then
+    if not test_result or test_result.status ~= "failed" then
       -- Send test_started first if we haven't seen this test before
-      if not params.output_state.test_results[test_name] then
+      if not test_result then
+        -- Send "running" status to storage (semantic: test was running when we became aware of it)
         send({
           type = "test_started",
           test_name = test_name,
           status = "running",
         })
+        -- Store "failed" status in parsing state (to remember: waiting for location from stack trace)
+        -- The status field here is a parsing phase indicator, not the test result status
+        table.insert(params.output_state.tests_progress, {
+          name = test_name,
+          status = "failed", -- Parsing state: "saw FAIL, waiting for location line"
+        })
+      else
+        -- Don't send test_result yet - wait for stack trace to get location
+        test_result.status = "failed"
       end
-      -- Don't send test_result yet - wait for stack trace to get location
-      params.output_state.test_results[test_name] = "failed"
     end
+    return
+  end
+
+  -- Parse skipped tests
+  -- Format: 2/2 server_test.test.333...SKIP
+  local skip_test_name = clean_line:match("^%d+/%d+ (.-)%.%.%.SKIP%s*$")
+  if skip_test_name then
+    -- Extract just the test name (remove the module prefix)
+    local test_name = skip_test_name:match("%.test%.(.+)$") or skip_test_name
+
+    -- Find test in state by matching BOTH extracted name and full name
+    -- (pre-populated tests might use either format depending on treesitter)
+    local test_index = nil
+    local location = nil
+    for i, tr in ipairs(params.output_state.tests_progress) do
+      if tr.name == test_name or tr.name == skip_test_name then
+        test_index = i
+        test_name = tr.name  -- Use the actual name from state for events
+        break
+      end
+    end
+
+    -- If test wasn't pre-populated, send test_started first
+    if not test_index then
+      send({
+        type = "test_started",
+        test_name = test_name,
+        status = "running",
+      })
+    end
+
+    -- Try to find location using treesitter
+    if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
+      local line_no = ts.get_test_def_line_no(params.bufnr, test_name)
+      if line_no then
+        local file_path = vim.api.nvim_buf_get_name(params.bufnr)
+        location = file_path .. ":" .. (line_no + 1)
+      end
+    end
+
+    -- Send test_result for skipped test
+    send({
+      type = "test_result",
+      test_name = test_name,
+      status = "skipped",
+      location = location,
+    })
+
+    -- Remove from state if it was there
+    if test_index then
+      table.remove(params.output_state.tests_progress, test_index)
+    end
+
     return
   end
 
@@ -254,9 +316,12 @@ M.handle_output = function(line, send, params)
           location = location,
         })
 
-        -- Mark that we've sent the test_result
-        if params.output_state.test_results then
-          params.output_state.test_results[params.output_state.current_failing_test .. "_result_sent"] = true
+        -- Remove completed test from state (no longer needed for parsing)
+        for i, tr in ipairs(params.output_state.tests_progress) do
+          if tr.name == params.output_state.current_failing_test then
+            table.remove(params.output_state.tests_progress, i)
+            break
+          end
         end
 
         params.output_state.current_failing_test = nil -- Reset after finding location
@@ -274,10 +339,6 @@ M.run = function(params, send)
 
   local bin = M.get_bin(params.bufnr)
   local env = adapter_args.merge_env(M.options, params.bufnr)
-
-  -- Create output state for handle_output (strategy will use this, and we use it in on_exit)
-  local state = core.create_output_state()
-  params.output_state = state
 
   local all_output = {}
 
@@ -312,7 +373,10 @@ M.run = function(params, send)
         status = "running",
         location = location,
       })
-      state.test_results[test_name] = "running"
+      table.insert(params.output_state.tests_progress, {
+        name = test_name,
+        status = "running",
+      })
     end
   end
 
@@ -365,58 +429,68 @@ M.run = function(params, send)
           -- If we're running specific tests, finalize their status
           if #params.test_names > 0 then
             for _, test_name in ipairs(params.test_names) do
-              local status = state.test_results[test_name]
-
-              -- For tests still "running", mark as passed
-              if status == "running" then
-                -- Find test location using treesitter
-                local location = nil
-                if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
-                  local line_no = ts.get_test_def_line_no(params.bufnr, test_name)
-                  if line_no then
-                    local file_path = vim.api.nvim_buf_get_name(params.bufnr)
-                    location = file_path .. ":" .. (line_no + 1) -- Convert from 0-based to 1-based
-                  end
+              -- Find test in results array
+              local test_result = nil
+              local test_index = nil
+              for i, tr in ipairs(params.output_state.tests_progress) do
+                if tr.name == test_name then
+                  test_result = tr
+                  test_index = i
+                  break
                 end
+              end
 
-                send({
-                  type = "test_result",
-                  test_name = test_name,
-                  status = "passed",
-                  location = location,
-                })
-                state.test_results[test_name] = "passed"
-              -- For tests marked as "failed" but location not yet sent, send without location
-              elseif status == "failed" and not state.test_results[test_name .. "_result_sent"] then
-                send({
-                  type = "test_result",
-                  test_name = test_name,
-                  status = "failed",
-                })
-                state.test_results[test_name .. "_result_sent"] = true
+              if test_result then
+                -- For tests still "running", mark as passed
+                if test_result.status == "running" then
+                  -- Find test location using treesitter
+                  local location = nil
+                  if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
+                    local line_no = ts.get_test_def_line_no(params.bufnr, test_name)
+                    if line_no then
+                      local file_path = vim.api.nvim_buf_get_name(params.bufnr)
+                      location = file_path .. ":" .. (line_no + 1) -- Convert from 0-based to 1-based
+                    end
+                  end
+
+                  send({
+                    type = "test_result",
+                    test_name = test_name,
+                    status = "passed",
+                    location = location,
+                  })
+                  -- Remove completed test from state
+                  table.remove(params.output_state.tests_progress, test_index)
+                -- For tests marked as "failed" but location not yet sent, send without location
+                elseif test_result.status == "failed" then
+                  send({
+                    type = "test_result",
+                    test_name = test_name,
+                    status = "failed",
+                  })
+                  -- Remove completed test from state
+                  table.remove(params.output_state.tests_progress, test_index)
+                end
               end
             end
           else
             -- For run_all without specific test names, create generic test entries
-            -- First send test_started, then test_result for passed tests
+            -- These are immediately completed, so no need to add to state
             local passed_count = passed_tests
             for i = 1, passed_count do
               local generic_name = "test_" .. i
-              if not state.test_results[generic_name] then
-                -- Send test_started first
-                send({
-                  type = "test_started",
-                  test_name = generic_name,
-                  status = "running",
-                })
-                -- Then send test_result
-                send({
-                  type = "test_result",
-                  test_name = generic_name,
-                  status = "passed",
-                })
-                state.test_results[generic_name] = "passed"
-              end
+              -- Send test_started first
+              send({
+                type = "test_started",
+                test_name = generic_name,
+                status = "running",
+              })
+              -- Then send test_result (completed immediately, no state tracking needed)
+              send({
+                type = "test_result",
+                test_name = generic_name,
+                status = "passed",
+              })
             end
           end
         end
