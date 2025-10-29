@@ -393,58 +393,18 @@ M.run = function(params, send)
   local bin = M.get_bin(params.bufnr)
   local env = adapter_args.merge_env(M.options, params.bufnr)
 
-  local all_output = {}
-
-  -- Helper function to collect output
-  local function process_output(data)
-    table.insert(all_output, data)
-
-    -- Always send as "stdout" so the colorizer can parse ANSI codes properly
-    -- The UI treats "stderr" as errors and highlights everything in red,
-    -- stripping ANSI codes. By sending as "stdout", we get proper color parsing.
-    -- The strategy will handle line-by-line parsing via handle_output.
-    send({ type = "stdout", raw = data, output = data })
-  end
-
-  -- Emit test_started events for all tests we're about to run
-  -- This ensures they exist in storage before we send test_result events
-  if #params.test_names > 0 then
-    for _, test_name in ipairs(params.test_names) do
-      -- Find test location using treesitter
-      local location = nil
-      if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
-        local line_no = ts.get_test_def_line_no(params.bufnr, test_name)
-        if line_no then
-          local file_path = vim.api.nvim_buf_get_name(params.bufnr)
-          location = file_path .. ":" .. (line_no + 1) -- Convert from 0-based to 1-based
-        end
-      end
-
-      send({
-        type = "test_started",
-        test_name = test_name,
-        status = "running",
-        location = location,
-      })
-      table.insert(params.output_state.tests_progress, {
-        name = test_name,
-        status = "running",
-      })
-    end
-  end
-
   local job = Job:new({
     command = bin,
     args = args,
     env = env,
     cwd = params.cwd,
     on_stdout = function(_, data)
-      process_output(data)
+      send({ type = "stdout", raw = data, output = data })
     end,
     on_stderr = function(_, data)
       -- Zig sends ALL output to stderr, including test results
       -- But we treat it as stdout for proper color rendering
-      process_output(data)
+      send({ type = "stdout", raw = data, output = data })
     end,
     on_exit = function(_, return_val)
       send({ type = "exit", code = return_val })
