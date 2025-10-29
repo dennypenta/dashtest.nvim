@@ -5,6 +5,7 @@ local u = require("plenary.async.util")
 local ui = require("quicktest.ui")
 local p = require("plenary.path")
 local strategies = require("quicktest.strategies")
+local logger = require("quicktest.logger")
 
 local M = {}
 
@@ -207,17 +208,32 @@ local function get_adapter_and_params(config, type, adapter_name, current_buffer
     or get_adapter_by_name(config.adapters, adapter_name)
 
   if not adapter then
+    logger.debug_context("module", "No adapter found")
     return nil, nil, "Failed to test: no suitable adapter found."
   end
+
+  logger.debug_context("module", string.format("Using adapter: %s for type: %s", adapter.name, type))
 
   local method = adapter["build_" .. type .. "_run_params"]
 
   if not method then
+    logger.debug_context("module", string.format("Adapter %s missing build_%s_run_params", adapter.name, type))
     return nil, nil, "Failed to test: adapter '" .. adapter.name .. "' does not support '" .. type .. "' run."
   end
 
   local params, error = method(current_buffer, cursor_pos, opts)
+
+  logger.debug_context(
+    "module",
+    string.format(
+      "build_%s_run_params returned: params=%s, error=%s",
+      type,
+      params and "present" or "nil",
+      error or "nil"
+    )
+  )
   if error ~= nil and error ~= "" then
+    logger.debug_context("module", string.format("Returning error: %s", error))
     return nil, nil, "Failed to test: " .. error .. "."
   end
 

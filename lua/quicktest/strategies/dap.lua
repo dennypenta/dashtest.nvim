@@ -18,6 +18,13 @@ end
 ---@return QuicktestStrategyResult
 M.run = function(adapter, params, config, opts)
 
+  logger.debug_context("strategies.dap", string.format("DAP strategy run started with params: %s", vim.inspect({
+    adapter_name = adapter.name,
+    params = params,
+    opts = opts,
+    has_build_dap_config = adapter.build_dap_config ~= nil,
+  })))
+
   if not adapter.build_dap_config then
     logger.debug_context("strategies.dap", "Adapter missing build_dap_config method")
     error("Adapter does not support DAP strategy - missing build_dap_config method")

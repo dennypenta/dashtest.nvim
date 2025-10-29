@@ -95,6 +95,19 @@ M.build_file_run_params = function(bufnr, cursor_pos, opts)
   local cwd = M.get_cwd(bufnr)
 
   local test_names = ts.get_test_names(bufnr)
+
+  logger.debug_context("adapters.zig", string.format("build_file_run_params: %s", vim.inspect({
+    bufnr = bufnr,
+    buf_valid = vim.api.nvim_buf_is_valid(bufnr),
+    buf_loaded = vim.api.nvim_buf_is_loaded(bufnr),
+    buf_name = vim.api.nvim_buf_get_name(bufnr),
+    filetype = vim.api.nvim_buf_get_option(bufnr, "filetype"),
+    cwd = cwd,
+    test_count = test_names and #test_names or 0,
+    test_names = test_names or {},
+    opts = opts,
+  })))
+
   if not test_names or #test_names == 0 then
     return nil, "No tests to run"
   end
