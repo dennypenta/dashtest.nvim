@@ -6,8 +6,6 @@ local M = {
   name = "dap",
 }
 
-local default_test_name = "DAP Test"
-
 M.is_available = function()
   local ok, dap = pcall(require, "dap")
   return ok and dap ~= nil
@@ -93,12 +91,6 @@ M.run = function(adapter, params, config, opts)
   local dap_config = adapter.build_dap_config(params.bufnr, params)
   logger.debug_context("strategies.dap", string.format("DAP config built: %s", vim.inspect(dap_config)))
 
-  -- Emit test started event
-  local test_name = dap_config.name or default_test_name
-  local test_location = vim.api.nvim_buf_get_name(params.bufnr)
-  logger.debug_context("strategies.dap", string.format("Test started: %s at %s", test_name, test_location))
-  storage.test_started(test_name, test_location)
-
   -- Get filetype for DAP configuration
   local test_bufnr = vim.fn.bufnr(params.bufnr)
   local filetype = vim.api.nvim_buf_get_option(test_bufnr, "filetype")
@@ -119,11 +111,6 @@ M.run = function(adapter, params, config, opts)
         result_code = info.exitCode
         is_finished = true
 
-        -- Emit test finished event
-        local status = info.exitCode == 0 and "passed" or "failed"
-        logger.debug_context("strategies.dap", string.format("Test finished: %s [%s]", test_name, status))
-        storage.test_finished(test_name, status, nil) -- DAP doesn't track duration directly
-
         if output_fd then
           vim.uv.fs_close(output_fd)
         end
@@ -138,9 +125,6 @@ M.run = function(adapter, params, config, opts)
         logger.debug_context("strategies.dap", "No exit event received, marking as passed")
         result_code = 0
         is_finished = true
-
-        -- Emit test finished event if not already emitted
-        storage.test_finished(test_name, "passed", nil)
 
         if output_fd then
           vim.uv.fs_close(output_fd)
@@ -173,12 +157,9 @@ M.run = function(adapter, params, config, opts)
       logger.debug_context("strategies.dap", "Stop called, terminating DAP session")
       dap.terminate()
       if not is_finished then
-        logger.debug_context("strategies.dap", "Marking test as failed due to stop")
+        logger.debug_context("strategies.dap", "Session terminated")
         result_code = -1
         is_finished = true
-
-        -- Emit cancelled/stopped event
-        storage.test_finished(test_name, "failed", nil)
 
         if output_fd then
           vim.uv.fs_close(output_fd)
