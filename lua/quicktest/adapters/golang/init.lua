@@ -247,9 +247,10 @@ M.handle_output = function(line, send, params)
   end
 
   -- Check for test completion (--- PASS/FAIL/SKIP)
-  local test_name_pass = line:match("^%-%-%-%s+PASS:%s+([^%(]+)")
-  local test_name_fail = line:match("^%-%-%-%s+FAIL:%s+([^%(]+)")
-  local test_name_skip = line:match("^%-%-%-%s+SKIP:%s+([^%(]+)")
+  -- Note: Subtests have leading whitespace/indentation
+  local test_name_pass = line:match("^%s*%-%-%-%s+PASS:%s+([^%(]+)")
+  local test_name_fail = line:match("^%s*%-%-%-%s+FAIL:%s+([^%(]+)")
+  local test_name_skip = line:match("^%s*%-%-%-%s+SKIP:%s+([^%(]+)")
 
   local status, test_name
   if test_name_pass then
@@ -296,42 +297,6 @@ M.handle_output = function(line, send, params)
       end
     end
 
-    -- CRITICAL: Go only emits --- PASS/FAIL for parent tests, not subtests
-    -- When a parent test completes, also complete all its subtests with the same status
-    -- Subtests have names like "ParentTest/subtest1", "ParentTest/subtest2"
-    local subtest_prefix = test_name .. "/"
-    local subtests_completed = 0
-    local i = 1
-    while i <= #params.output_state.tests_progress do
-      local test = params.output_state.tests_progress[i]
-      if test.name:sub(1, #subtest_prefix) == subtest_prefix then
-        logger.debug_context(
-          "adapters.golang.output",
-          string.format("Completing subtest with parent status: %s [%s]", test.name, status)
-        )
-        -- This is a subtest of the completed parent - complete it with parent's status
-        local subtest_location = M.find_test_location(test.name, params)
-        send({
-          type = "test_result",
-          test_name = test.name,
-          status = status, -- Inherit parent's status
-          location = subtest_location,
-        })
-        -- Remove from state
-        table.remove(params.output_state.tests_progress, i)
-        subtests_completed = subtests_completed + 1
-        -- Don't increment i since we removed an element
-      else
-        i = i + 1
-      end
-    end
-
-    if subtests_completed > 0 then
-      logger.debug_context(
-        "adapters.golang.output",
-        string.format("Completed %d subtests of parent %s", subtests_completed, test_name)
-      )
-    end
 
     return
   end
