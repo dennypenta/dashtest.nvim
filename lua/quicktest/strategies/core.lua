@@ -17,6 +17,19 @@ local M = {}
 --- @field current_failing_test string? Name of the test that is currently failing (used by Zig for multi-line parsing)
 --- @field current_error_message string? Error message associated with current_failing_test (used by Zig)
 
+--- Base parameters shared across all adapter run implementations
+--- Each adapter can extend this with their specific fields if needed
+---
+--- @class RunParams
+--- @field func_names string[] Names of test functions to run
+--- @field sub_func_names string[] Names of sub-tests/nested tests to run
+--- @field module string Module or package path to run tests in
+--- @field cwd string Working directory for test execution
+--- @field bufnr integer Buffer number of the test file
+--- @field cursor_pos integer[] Cursor position [row, col]
+--- @field opts AdapterRunOpts Adapter-specific run options
+--- @field output_state OutputState State for tracking test output parsing
+
 --- Creates a new unified output state for test execution
 --- All strategies MUST use this function to create the initial state passed to handle_output().
 ---

@@ -59,14 +59,6 @@ local function find_test_location(test_name, cwd)
   return nil, nil
 end
 
----@class ZigRunParams
----@field test_names string[]
----@field cwd string
----@field bufnr integer
----@field cursor_pos integer[]
----@field opts AdapterRunOpts
----@field output_state OutputState
-
 ---@param bufnr integer
 ---@return string
 M.get_cwd = function(bufnr)
@@ -90,11 +82,11 @@ end
 ---@param bufnr integer
 ---@param cursor_pos integer[]
 ---@param opts AdapterRunOpts
----@return ZigRunParams | nil, string | nil
+---@return RunParams | nil, string | nil
 M.build_file_run_params = function(bufnr, cursor_pos, opts)
   local cwd = M.get_cwd(bufnr)
 
-  local test_names = ts.get_test_names(bufnr)
+  local func_names = ts.get_test_names(bufnr)
 
   logger.debug_context("adapters.zig", string.format("build_file_run_params: %s", vim.inspect({
     bufnr = bufnr,
@@ -103,17 +95,19 @@ M.build_file_run_params = function(bufnr, cursor_pos, opts)
     buf_name = vim.api.nvim_buf_get_name(bufnr),
     filetype = vim.api.nvim_buf_get_option(bufnr, "filetype"),
     cwd = cwd,
-    test_count = test_names and #test_names or 0,
-    test_names = test_names or {},
+    test_count = func_names and #func_names or 0,
+    func_names = func_names or {},
     opts = opts,
   })))
 
-  if not test_names or #test_names == 0 then
+  if not func_names or #func_names == 0 then
     return nil, "No tests to run"
   end
 
   return {
-    test_names = test_names,
+    func_names = func_names,
+    sub_func_names = {},
+    module = "",
     cwd = cwd,
     bufnr = bufnr,
     cursor_pos = cursor_pos,
@@ -125,18 +119,20 @@ end
 ---@param bufnr integer
 ---@param cursor_pos integer[]
 ---@param opts AdapterRunOpts
----@return ZigRunParams | nil, string | nil
+---@return RunParams | nil, string | nil
 M.build_line_run_params = function(bufnr, cursor_pos, opts)
-  local test_names = ts.get_nearest_test_names(bufnr, cursor_pos)
+  local func_names = ts.get_nearest_test_names(bufnr, cursor_pos)
 
   local cwd = M.get_cwd(bufnr)
 
-  if not test_names or #test_names == 0 then
+  if not func_names or #func_names == 0 then
     return nil, "No tests to run"
   end
 
   return {
-    test_names = test_names,
+    func_names = func_names,
+    sub_func_names = {},
+    module = "",
     cwd = cwd,
     bufnr = bufnr,
     cursor_pos = cursor_pos,
@@ -148,12 +144,14 @@ end
 ---@param bufnr integer
 ---@param cursor_pos integer[]
 ---@param opts AdapterRunOpts
----@return ZigRunParams | nil, string | nil
+---@return RunParams | nil, string | nil
 M.build_all_run_params = function(bufnr, cursor_pos, opts)
   local cwd = M.get_cwd(bufnr)
 
   return {
-    test_names = {},
+    func_names = {},
+    sub_func_names = {},
+    module = "",
     cwd = cwd,
     bufnr = bufnr,
     cursor_pos = cursor_pos,
@@ -164,15 +162,17 @@ end
 ---@param bufnr integer
 ---@param cursor_pos integer[]
 ---@param opts AdapterRunOpts
----@return ZigRunParams | nil, string | nil
+---@return RunParams | nil, string | nil
 M.build_dir_run_params = function(bufnr, cursor_pos, opts)
   local cwd = M.get_cwd(bufnr)
 
   -- Collect all test names from the current buffer
-  local test_names = ts.get_test_names(bufnr)
+  local func_names = ts.get_test_names(bufnr)
 
   return {
-    test_names = test_names,
+    func_names = func_names,
+    sub_func_names = {},
+    module = "",
     cwd = cwd,
     bufnr = bufnr,
     cursor_pos = cursor_pos,
@@ -181,12 +181,12 @@ M.build_dir_run_params = function(bufnr, cursor_pos, opts)
     nil
 end
 
----@param params ZigRunParams
+---@param params RunParams
 ---@return string[]
 M.build_cmd = function(params)
   local additional_args = adapter_args.merge_additional_args(M.options, params.bufnr, params.opts)
   local test_filter_option = M.get_test_filter_option(params.bufnr)
-  local args = cmd.build_args(params.opts.cmd_override, params.test_names, additional_args, test_filter_option)
+  local args = cmd.build_args(params.opts.cmd_override, params.func_names, additional_args, test_filter_option)
   args = M.options.args and M.options.args(params.bufnr, args) or args
   return args
 end
@@ -194,7 +194,7 @@ end
 ---Parse a single line of Zig test plain text output and send structured events
 ---@param line string
 ---@param send fun(data: CmdData)
----@param params ZigRunParams
+---@param params RunParams
 M.handle_output = function(line, send, params)
   logger.debug_context("adapters.zig.output", string.format("Parsing line: %s", line))
 
@@ -439,7 +439,7 @@ M.handle_output = function(line, send, params)
   end
 end
 
----@param params ZigRunParams
+---@param params RunParams
 ---@param send fun(data: CmdData)
 ---@return integer
 M.run = function(params, send)
@@ -501,7 +501,7 @@ M.is_enabled = function(bufnr, type)
 end
 
 ---@param test_name string
----@param params ZigRunParams
+---@param params RunParams
 ---@return string?
 M.find_test_location = function(test_name, params)
   local file_path, line_no = find_test_location(test_name, params.cwd)
@@ -512,7 +512,7 @@ M.find_test_location = function(test_name, params)
 end
 
 ---@param bufnr integer
----@param params ZigRunParams
+---@param params RunParams
 ---@return table?
 M.build_dap_config = function(bufnr, params)
   local additional_args = adapter_args.merge_additional_args(M.options, bufnr, params.opts)

@@ -72,16 +72,6 @@ local function get_module_path(cwd, bufnr)
   end
 end
 
----@class GoRunParams
----@field func_names string[]
----@field sub_func_names string[]
----@field module string
----@field cwd string
----@field bufnr integer
----@field cursor_pos integer[]
----@field opts AdapterRunOpts
----@field output_state OutputState
-
 ---@param bufnr integer
 ---@return string
 M.get_cwd = function(bufnr)
@@ -99,7 +89,7 @@ end
 ---@param bufnr integer
 ---@param cursor_pos integer[]
 ---@param opts AdapterRunOpts
----@return GoRunParams | nil, string | nil
+---@return RunParams | nil, string | nil
 M.build_file_run_params = function(bufnr, cursor_pos, opts)
   local cwd = M.get_cwd(bufnr)
   local module = get_module_path(cwd, bufnr) or "."
@@ -124,7 +114,7 @@ end
 ---@param bufnr integer
 ---@param cursor_pos integer[]
 ---@param opts AdapterRunOpts
----@return GoRunParams | nil, string | nil
+---@return RunParams | nil, string | nil
 M.build_line_run_params = function(bufnr, cursor_pos, opts)
   local func_names = ts.get_nearest_func_names(bufnr, cursor_pos)
   local sub_test_name = ts.get_sub_testcase_name(bufnr, cursor_pos) or ts.get_table_test_name(bufnr, cursor_pos)
@@ -163,7 +153,7 @@ end
 ---@param bufnr integer
 ---@param cursor_pos integer[]
 ---@param opts AdapterRunOpts
----@return GoRunParams | nil, string | nil
+---@return RunParams | nil, string | nil
 M.build_all_run_params = function(bufnr, cursor_pos, opts)
   local cwd = M.get_cwd(bufnr)
   local module = "./..."
@@ -183,7 +173,7 @@ end
 ---@param bufnr integer
 ---@param cursor_pos integer[]
 ---@param opts AdapterRunOpts
----@return GoRunParams | nil, string | nil
+---@return RunParams | nil, string | nil
 M.build_dir_run_params = function(bufnr, cursor_pos, opts)
   local cwd = M.get_cwd(bufnr)
   local module = get_module_path(cwd, bufnr) or "."
@@ -200,7 +190,7 @@ M.build_dir_run_params = function(bufnr, cursor_pos, opts)
     nil
 end
 
----@param params GoRunParams
+---@param params RunParams
 ---@return string[]
 M.build_cmd = function(params)
   local additional_args = adapter_args.merge_additional_args(M.options, params.bufnr, params.opts)
@@ -212,7 +202,7 @@ end
 ---Parse a single line of Go test plain text output and send structured events
 ---@param line string
 ---@param send fun(data: CmdData)
----@param params GoRunParams
+---@param params RunParams
 M.handle_output = function(line, send, params)
   logger.debug_context("adapters.golang.output", string.format("Parsing line: %s", line))
 
@@ -390,7 +380,7 @@ M.handle_output = function(line, send, params)
   end
 end
 
----@param params GoRunParams
+---@param params RunParams
 ---@param send fun(data: CmdData)
 ---@return integer
 M.run = function(params, send)
@@ -456,7 +446,7 @@ M.is_enabled = function(bufnr, type)
 end
 
 ---@param test_name string
----@param params GoRunParams
+---@param params RunParams
 ---@return string?
 M.find_test_location = function(test_name, params)
   -- Check if this is a sub-test (contains "/")
@@ -519,7 +509,7 @@ M.find_test_location = function(test_name, params)
 end
 
 ---@param bufnr integer
----@param params GoRunParams
+---@param params RunParams
 ---@return table?
 M.build_dap_config = function(bufnr, params)
   if params.module == "./..." then
