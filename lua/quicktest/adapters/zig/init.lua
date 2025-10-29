@@ -185,6 +185,59 @@ M.handle_output = function(line, send, params)
   -- Strip ANSI color codes for reliable parsing (especially in DAP mode)
   local clean_line = strip_ansi_codes(line)
 
+  -- Parse passing tests
+  -- Format: 1/5 server.test_0...OK
+  -- Format: 2/5 server_test.test.test http server with SIGTERM...OK
+  local ok_full_test_name = clean_line:match("^%d+/%d+ (.-)%.%.%.OK%s*$")
+  if ok_full_test_name then
+    -- Extract just the test name (remove the module prefix)
+    local test_name = ok_full_test_name:match("%.test%.(.+)$") or ok_full_test_name
+
+    -- Find test in state by matching BOTH extracted name and full name
+    local test_index = nil
+    local location = nil
+    for i, tr in ipairs(params.output_state.tests_progress) do
+      if tr.name == test_name or tr.name == ok_full_test_name then
+        test_index = i
+        test_name = tr.name -- Use the actual name from state for events
+        break
+      end
+    end
+
+    if not test_index then
+      -- Send test_started first if test wasn't pre-populated
+      send({
+        type = "test_started",
+        test_name = test_name,
+        status = "running",
+      })
+    end
+
+    -- Try to find location using treesitter
+    if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
+      local line_no = ts.get_test_def_line_no(params.bufnr, test_name)
+      if line_no then
+        local file_path = vim.api.nvim_buf_get_name(params.bufnr)
+        location = file_path .. ":" .. (line_no + 1)
+      end
+    end
+
+    -- Send test_result for passing test
+    send({
+      type = "test_result",
+      test_name = test_name,
+      status = "passed",
+      location = location,
+    })
+
+    -- Remove from state if it was there
+    if test_index then
+      table.remove(params.output_state.tests_progress, test_index)
+    end
+
+    return
+  end
+
   -- Parse test failures
   -- Format: 2/3 server_test.test.11...FAIL (Jo)
   -- Note: Line may end with \r (carriage return)
@@ -244,7 +297,7 @@ M.handle_output = function(line, send, params)
     for i, tr in ipairs(params.output_state.tests_progress) do
       if tr.name == test_name or tr.name == skip_test_name then
         test_index = i
-        test_name = tr.name  -- Use the actual name from state for events
+        test_name = tr.name -- Use the actual name from state for events
         break
       end
     end
@@ -394,109 +447,7 @@ M.run = function(params, send)
       process_output(data)
     end,
     on_exit = function(_, return_val)
-      vim.schedule(function()
-        -- Parse the test summary to emit test stats
-        local output_text = table.concat(all_output, "\n")
-        -- Strip ANSI codes for reliable parsing
-        local clean_output = strip_ansi_codes(output_text)
-
-        -- Extract test counts
-        -- Format: "1 passed; 0 skipped; 2 failed."
-        local passed_tests, skipped_tests, failed_tests =
-          clean_output:match("(%d+) passed; (%d+) skipped; (%d+) failed%.")
-        local total_tests = nil
-
-        if passed_tests then
-          -- Calculate total from passed + skipped + failed
-          passed_tests = tonumber(passed_tests)
-          skipped_tests = tonumber(skipped_tests)
-          failed_tests = tonumber(failed_tests)
-          total_tests = passed_tests + skipped_tests + failed_tests
-        else
-          -- Try success format: "All 3 tests passed."
-          total_tests = clean_output:match("All (%d+) tests passed%.")
-          if total_tests then
-            passed_tests = tonumber(total_tests)
-            failed_tests = 0
-          end
-        end
-
-        if passed_tests and total_tests then
-          passed_tests = tonumber(passed_tests)
-          total_tests = tonumber(total_tests)
-          failed_tests = tonumber(failed_tests)
-
-          -- If we're running specific tests, finalize their status
-          if #params.test_names > 0 then
-            for _, test_name in ipairs(params.test_names) do
-              -- Find test in results array
-              local test_result = nil
-              local test_index = nil
-              for i, tr in ipairs(params.output_state.tests_progress) do
-                if tr.name == test_name then
-                  test_result = tr
-                  test_index = i
-                  break
-                end
-              end
-
-              if test_result then
-                -- For tests still "running", mark as passed
-                if test_result.status == "running" then
-                  -- Find test location using treesitter
-                  local location = nil
-                  if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
-                    local line_no = ts.get_test_def_line_no(params.bufnr, test_name)
-                    if line_no then
-                      local file_path = vim.api.nvim_buf_get_name(params.bufnr)
-                      location = file_path .. ":" .. (line_no + 1) -- Convert from 0-based to 1-based
-                    end
-                  end
-
-                  send({
-                    type = "test_result",
-                    test_name = test_name,
-                    status = "passed",
-                    location = location,
-                  })
-                  -- Remove completed test from state
-                  table.remove(params.output_state.tests_progress, test_index)
-                -- For tests marked as "failed" but location not yet sent, send without location
-                elseif test_result.status == "failed" then
-                  send({
-                    type = "test_result",
-                    test_name = test_name,
-                    status = "failed",
-                  })
-                  -- Remove completed test from state
-                  table.remove(params.output_state.tests_progress, test_index)
-                end
-              end
-            end
-          else
-            -- For run_all without specific test names, create generic test entries
-            -- These are immediately completed, so no need to add to state
-            local passed_count = passed_tests
-            for i = 1, passed_count do
-              local generic_name = "test_" .. i
-              -- Send test_started first
-              send({
-                type = "test_started",
-                test_name = generic_name,
-                status = "running",
-              })
-              -- Then send test_result (completed immediately, no state tracking needed)
-              send({
-                type = "test_result",
-                test_name = generic_name,
-                status = "passed",
-              })
-            end
-          end
-        end
-
-        send({ type = "exit", code = return_val })
-      end)
+      send({ type = "exit", code = return_val })
     end,
   })
   job:start()

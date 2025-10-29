@@ -267,6 +267,31 @@ M.handle_output = function(line, send, params)
         break
       end
     end
+
+    -- CRITICAL: Go only emits --- PASS/FAIL for parent tests, not subtests
+    -- When a parent test completes, also complete all its subtests with the same status
+    -- Subtests have names like "ParentTest/subtest1", "ParentTest/subtest2"
+    local subtest_prefix = test_name .. "/"
+    local i = 1
+    while i <= #params.output_state.tests_progress do
+      local test = params.output_state.tests_progress[i]
+      if test.name:sub(1, #subtest_prefix) == subtest_prefix then
+        -- This is a subtest of the completed parent - complete it with parent's status
+        local subtest_location = M.find_test_location(test.name, params)
+        send({
+          type = "test_result",
+          test_name = test.name,
+          status = status, -- Inherit parent's status
+          location = subtest_location,
+        })
+        -- Remove from state
+        table.remove(params.output_state.tests_progress, i)
+        -- Don't increment i since we removed an element
+      else
+        i = i + 1
+      end
+    end
+
     return
   end
 

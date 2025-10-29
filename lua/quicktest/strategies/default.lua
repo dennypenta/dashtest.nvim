@@ -77,19 +77,28 @@ M.run = function(adapter, params, config, opts)
     storage.test_started(test_name, test_location)
 
     local results = {}
-    while is_running() do
+    local job_done = false
+
+    -- Keep processing events even after exit, up to a reasonable limit.
+    -- This drains buffered events that arrived before exit but haven't been processed yet.
+    -- The 10k limit prevents infinite loops if the channel doesn't close properly.
+    local events_after_exit = 0
+    local MAX_EVENTS_AFTER_EXIT = 10000
+
+    while is_running() or (job_done and events_after_exit < MAX_EVENTS_AFTER_EXIT) do
       local result = receiver.recv()
+      if not result then
+        break -- Channel closed or no more events
+      end
+
       table.insert(results, result)
 
       u.scheduler()
 
-      if not is_running() then
-        return
-      end
-
       if result.type == "exit" then
         job.exit_code = result.code
         current_job = nil
+        job_done = true
 
         -- Emit test finished event
         local status = result.code == 0 and "passed" or "failed"
@@ -99,7 +108,12 @@ M.run = function(adapter, params, config, opts)
         if adapter.after_run then
           adapter.after_run(params, results)
         end
-      elseif result.type == "stdout" and result.output then
+      end
+      if job_done then
+        events_after_exit = events_after_exit + 1
+      end
+
+      if result.type == "stdout" and result.output then
         storage.test_output("stdout", result.output)
         -- Let adapter parse output line by line if it has handle_output
         if adapter.handle_output and params.output_state then
