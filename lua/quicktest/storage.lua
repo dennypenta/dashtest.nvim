@@ -1,4 +1,5 @@
 local M = {}
+local logger = require("quicktest.logger")
 
 ---@class TestResult
 ---@field name string
@@ -38,6 +39,7 @@ local current_state = {
 ---@param event_type string
 ---@param data any
 local function emit_event(event_type, data)
+  logger.debug_context("storage", string.format("emit_event: %s", event_type))
   for _, subscriber in ipairs(current_state.subscribers) do
     pcall(subscriber, event_type, data)
   end
@@ -55,6 +57,7 @@ function M.clear()
   current_state.output_lines = {}
   current_state.failed_test_index = 0
   current_state.cached_failed_tests = nil
+  logger.debug_context("storage", "State cleared: test_results, output_lines, failed_test_index reset")
   -- Don't clear subscribers - they persist across runs
   emit_event("run_started", {})
 end
@@ -63,6 +66,7 @@ end
 ---@param callback fun(event_type: string, data: any)
 function M.subscribe(callback)
   table.insert(current_state.subscribers, callback)
+  logger.debug_context("storage", string.format("Subscriber added, total: %d", #current_state.subscribers))
 end
 
 -- Unsubscribe from storage events
@@ -71,6 +75,7 @@ function M.unsubscribe(callback)
   for i, subscriber in ipairs(current_state.subscribers) do
     if subscriber == callback then
       table.remove(current_state.subscribers, i)
+      logger.debug_context("storage", string.format("Subscriber removed, remaining: %d", #current_state.subscribers))
       break
     end
   end
@@ -84,8 +89,10 @@ function M.test_started(name, location)
   for _, result in ipairs(current_state.test_results) do
     if result.name == name then
       -- Update existing test
+      logger.debug_context("storage", string.format("Test already exists, updating: %s", name))
       if location and location ~= "" then
         result.location = location
+        logger.debug_context("storage", string.format("Updated location: %s", location))
       end
       emit_event("test_started", result)
       return
@@ -93,6 +100,7 @@ function M.test_started(name, location)
   end
 
   -- Create new test entry
+  logger.debug_context("storage", string.format("Creating new test entry: %s", name))
   local result = {
     name = name,
     location = location,
@@ -102,6 +110,7 @@ function M.test_started(name, location)
   }
 
   table.insert(current_state.test_results, result)
+  logger.debug_context("storage", string.format("Total tests: %d", #current_state.test_results))
   emit_event("test_started", result)
 end
 
@@ -116,6 +125,7 @@ function M.test_output(type, data)
   }
 
   table.insert(current_state.output_lines, output)
+  logger.debug_context("storage", string.format("Output added [%s], total lines: %d", type, #current_state.output_lines))
   emit_event("test_output", output)
 end
 
@@ -131,6 +141,10 @@ function M.test_finished(name, status, duration, location)
       result.status = status
       result.duration = duration and duration or result.duration
       result.location = location and location or result.location
+      logger.debug_context(
+        "storage",
+        string.format("Test finished: %s [%s] duration=%s", name, status, tostring(duration))
+      )
       emit_event("test_finished", result)
       break
     end
@@ -164,12 +178,14 @@ function M.assert_failure(test_name, full_path, line, message)
   for _, result in ipairs(current_state.test_results) do
     if result.name == test_name then
       found_result = result
+      logger.debug_context("storage", string.format("Found existing test for assert failure: %s", test_name))
       break
     end
   end
 
   -- If test doesn't exist, create it
   if not found_result then
+    logger.debug_context("storage", string.format("Test not found, creating new test: %s", test_name))
     found_result = {
       name = test_name,
       location = full_path .. ":" .. line, -- Use assert location as test location
@@ -192,6 +208,7 @@ function M.assert_failure(test_name, full_path, line, message)
   for _, failure in ipairs(found_result.assert_failures) do
     if failure.full_path == full_path and failure.line == line then
       existing = failure
+      logger.debug_context("storage", string.format("Updating existing assert failure at %s:%d", full_path, line))
       break
     end
   end
@@ -201,12 +218,18 @@ function M.assert_failure(test_name, full_path, line, message)
     existing.message = message
   else
     -- Add new failure
+    logger.debug_context("storage", string.format("Adding new assert failure at %s:%d", full_path, line))
     table.insert(found_result.assert_failures, {
       full_path = full_path,
       line = line,
       message = message,
     })
   end
+
+  logger.debug_context(
+    "storage",
+    string.format("Total assert failures for test %s: %d", test_name, #found_result.assert_failures)
+  )
 
   emit_event("assert_failure", {
     test_name = test_name,
@@ -225,6 +248,10 @@ function M.assert_error(test_name, error_message)
       -- Update the error_message of the most recent assert failure
       local latest_failure = result.assert_failures[#result.assert_failures]
       latest_failure.error_message = error_message
+      logger.debug_context(
+        "storage",
+        string.format("Updated error message for test %s at %s:%d", test_name, latest_failure.full_path, latest_failure.line)
+      )
 
       emit_event("assert_error", {
         test_name = test_name,
@@ -235,6 +262,7 @@ function M.assert_error(test_name, error_message)
       return
     end
   end
+  logger.debug_context("storage", string.format("No assert failures found for test: %s", test_name))
 end
 
 -- Update assert failure message for the latest failure of a test
@@ -246,6 +274,10 @@ function M.assert_message(test_name, message)
       -- Update the message of the most recent assert failure
       local latest_failure = result.assert_failures[#result.assert_failures]
       latest_failure.message = message
+      logger.debug_context(
+        "storage",
+        string.format("Updated message for test %s at %s:%d", test_name, latest_failure.full_path, latest_failure.line)
+      )
 
       emit_event("assert_message", {
         test_name = test_name,
@@ -256,6 +288,7 @@ function M.assert_message(test_name, message)
       return
     end
   end
+  logger.debug_context("storage", string.format("No assert failures found for test: %s", test_name))
 end
 
 ---@return {total: number, running: number, passed: number, failed: number, skipped: number}
@@ -313,13 +346,20 @@ end
 function M.next_failed_test()
   local failed_tests = get_failed_tests()
   if failed_tests == nil or #failed_tests == 0 then
+    logger.debug_context("storage", "No failed tests found")
     return nil
   end
 
   current_state.failed_test_index = current_state.failed_test_index + 1
   if current_state.failed_test_index > #failed_tests then
     current_state.failed_test_index = 1
+    logger.debug_context("storage", "Wrapped around to first failed test")
   end
+
+  logger.debug_context(
+    "storage",
+    string.format("Navigation: index %d/%d, test: %s", current_state.failed_test_index, #failed_tests, failed_tests[current_state.failed_test_index].name)
+  )
 
   return failed_tests[current_state.failed_test_index]
 end
@@ -329,14 +369,20 @@ end
 function M.prev_failed_test()
   local failed_tests = get_failed_tests()
   if failed_tests == nil or #failed_tests == 0 then
+    logger.debug_context("storage", "No failed tests found")
     return nil
   end
 
   current_state.failed_test_index = current_state.failed_test_index - 1
   if current_state.failed_test_index < 1 then
     current_state.failed_test_index = #failed_tests
+    logger.debug_context("storage", "Wrapped around to last failed test")
   end
 
+  logger.debug_context(
+    "storage",
+    string.format("Navigation: index %d/%d, test: %s", current_state.failed_test_index, #failed_tests, failed_tests[current_state.failed_test_index].name)
+  )
   return failed_tests[current_state.failed_test_index]
 end
 

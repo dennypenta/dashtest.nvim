@@ -3,6 +3,7 @@ local cmd = require("quicktest.adapters.golang.cmd")
 local fs = require("quicktest.fs_utils")
 local Job = require("plenary.job")
 local adapter_args = require("quicktest.adapters.args")
+local logger = require("quicktest.logger")
 
 local M = {
   name = "go",
@@ -128,6 +129,9 @@ M.build_line_run_params = function(bufnr, cursor_pos, opts)
   local func_names = ts.get_nearest_func_names(bufnr, cursor_pos)
   local sub_test_name = ts.get_sub_testcase_name(bufnr, cursor_pos) or ts.get_table_test_name(bufnr, cursor_pos)
 
+  logger.debug_context("adapters.golang", string.format("Found func_names: %s", vim.inspect(func_names)))
+  logger.debug_context("adapters.golang", string.format("Found sub_test_name: %s", sub_test_name or "nil"))
+
   --- @type string[]
   local sub_func_names = {}
   if sub_test_name then
@@ -137,7 +141,10 @@ M.build_line_run_params = function(bufnr, cursor_pos, opts)
   local cwd = M.get_cwd(bufnr)
   local module = get_module_path(cwd, bufnr) or "."
 
+  logger.debug_context("adapters.golang", string.format("cwd: %s, module: %s", cwd, module))
+
   if not func_names or #func_names == 0 then
+    logger.debug_context("adapters.golang", "No tests to run")
     return nil, "No tests to run"
   end
 
@@ -207,17 +214,28 @@ end
 ---@param send fun(data: CmdData)
 ---@param params GoRunParams
 M.handle_output = function(line, send, params)
+  logger.debug_context("adapters.golang.output", string.format("Parsing line: %s", line))
+
   -- Check for test start (=== RUN)
   local run_test_name = line:match("^=== RUN%s+(.+)$")
   if run_test_name then
+    logger.debug_context(
+      "adapters.golang.output",
+      string.format("Detected test start: %s", run_test_name)
+    )
     -- Test started - track it and send event
     table.insert(params.output_state.tests_progress, {
       name = run_test_name,
       status = "running",
     })
+    logger.debug_context(
+      "adapters.golang.output",
+      string.format("Tests in progress: %d", #params.output_state.tests_progress)
+    )
 
     -- Find test location for navigation
     local location = M.find_test_location(run_test_name, params)
+    logger.debug_context("adapters.golang.output", string.format("Test location: %s", location or "nil"))
 
     send({
       type = "test_started",
@@ -246,11 +264,17 @@ M.handle_output = function(line, send, params)
   end
 
   if status and test_name then
+    logger.debug_context(
+      "adapters.golang.output",
+      string.format("Detected test completion: %s [%s]", test_name, status)
+    )
+
     -- Remove trailing whitespace from test_name
     test_name = test_name:gsub("%s+$", "")
 
     -- Find test location for navigation and diagnostics
     local location = M.find_test_location(test_name, params)
+    logger.debug_context("adapters.golang.output", string.format("Test location: %s", location or "nil"))
 
     -- Send event with location
     send({
@@ -264,6 +288,10 @@ M.handle_output = function(line, send, params)
     for i, test_result in ipairs(params.output_state.tests_progress) do
       if test_result.name == test_name then
         table.remove(params.output_state.tests_progress, i)
+        logger.debug_context(
+          "adapters.golang.output",
+          string.format("Removed test from progress, remaining: %d", #params.output_state.tests_progress)
+        )
         break
       end
     end
@@ -272,10 +300,15 @@ M.handle_output = function(line, send, params)
     -- When a parent test completes, also complete all its subtests with the same status
     -- Subtests have names like "ParentTest/subtest1", "ParentTest/subtest2"
     local subtest_prefix = test_name .. "/"
+    local subtests_completed = 0
     local i = 1
     while i <= #params.output_state.tests_progress do
       local test = params.output_state.tests_progress[i]
       if test.name:sub(1, #subtest_prefix) == subtest_prefix then
+        logger.debug_context(
+          "adapters.golang.output",
+          string.format("Completing subtest with parent status: %s [%s]", test.name, status)
+        )
         -- This is a subtest of the completed parent - complete it with parent's status
         local subtest_location = M.find_test_location(test.name, params)
         send({
@@ -286,10 +319,18 @@ M.handle_output = function(line, send, params)
         })
         -- Remove from state
         table.remove(params.output_state.tests_progress, i)
+        subtests_completed = subtests_completed + 1
         -- Don't increment i since we removed an element
       else
         i = i + 1
       end
+    end
+
+    if subtests_completed > 0 then
+      logger.debug_context(
+        "adapters.golang.output",
+        string.format("Completed %d subtests of parent %s", subtests_completed, test_name)
+      )
     end
 
     return
@@ -300,6 +341,10 @@ M.handle_output = function(line, send, params)
   -- Pattern: "Error Trace:" with full path - most important for location
   local full_path, line_str = line:match("Error Trace:%s*([^:]+):(%d+)")
   if full_path and line_str then
+    logger.debug_context(
+      "adapters.golang.output",
+      string.format("Detected Error Trace: %s:%s", full_path, line_str)
+    )
     local line_no = tonumber(line_str)
     -- Associate with the most recent running test
     local current_test = nil
@@ -310,6 +355,10 @@ M.handle_output = function(line, send, params)
       end
     end
     if current_test then
+      logger.debug_context(
+        "adapters.golang.output",
+        string.format("Associated assert failure with test: %s", current_test)
+      )
       send({
         type = "assert_failure",
         test_name = current_test,
@@ -317,6 +366,8 @@ M.handle_output = function(line, send, params)
         line = line_no,
         message = "",
       })
+    else
+      logger.debug_context("adapters.golang.output", "No running test found for assert failure")
     end
     return
   end
@@ -325,6 +376,7 @@ M.handle_output = function(line, send, params)
   local error_message = line:match("Error:%s*(.+)$")
   if error_message then
     error_message = error_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
+    logger.debug_context("adapters.golang.output", string.format("Detected Error message: %s", error_message))
     -- Associate with the most recent running test
     local current_test = nil
     for i = #params.output_state.tests_progress, 1, -1 do
@@ -334,11 +386,14 @@ M.handle_output = function(line, send, params)
       end
     end
     if current_test then
+      logger.debug_context("adapters.golang.output", string.format("Associated error with test: %s", current_test))
       send({
         type = "assert_error",
         test_name = current_test,
         message = error_message,
       })
+    else
+      logger.debug_context("adapters.golang.output", "No running test found for error message")
     end
     return
   end
@@ -347,6 +402,7 @@ M.handle_output = function(line, send, params)
   local assert_message = line:match("Messages:%s*(.+)$")
   if assert_message then
     assert_message = assert_message:gsub("^%s+", ""):gsub("%s+$", "") -- trim whitespace
+    logger.debug_context("adapters.golang.output", string.format("Detected Messages: %s", assert_message))
     -- Associate with the most recent running test
     local current_test = nil
     for i = #params.output_state.tests_progress, 1, -1 do
@@ -356,11 +412,14 @@ M.handle_output = function(line, send, params)
       end
     end
     if current_test then
+      logger.debug_context("adapters.golang.output", string.format("Associated message with test: %s", current_test))
       send({
         type = "assert_message",
         test_name = current_test,
         message = assert_message,
       })
+    else
+      logger.debug_context("adapters.golang.output", "No running test found for assert message")
     end
     return
   end
@@ -371,8 +430,10 @@ end
 ---@return integer
 M.run = function(params, send)
   local args = M.build_cmd(params)
+  logger.debug_context("adapters.golang", string.format("Command args: %s", vim.inspect(args)))
 
   local bin = M.get_bin(params.bufnr)
+  logger.debug_context("adapters.golang", string.format("Binary: %s", bin))
 
   local env = adapter_args.merge_env(M.options, params.bufnr)
 
@@ -388,6 +449,7 @@ M.run = function(params, send)
       send({ type = "stderr", raw = data, output = data })
     end,
     on_exit = function(_, return_val)
+      logger.debug_context("adapters.golang", string.format("Job exited with code: %d", return_val))
       send({ type = "exit", code = return_val })
     end,
   })
@@ -396,6 +458,7 @@ M.run = function(params, send)
   ---@type integer
   ---@diagnostic disable-next-line: assign-type-mismatch
   local pid = job.pid
+  logger.debug_context("adapters.golang", string.format("Job started with PID: %d", pid))
 
   return pid
 end
@@ -433,12 +496,21 @@ end
 M.find_test_location = function(test_name, params)
   -- Check if this is a sub-test (contains "/")
   if test_name:match("/") then
+    logger.debug_context("adapters.golang", "Test is a subtest, searching for parent and sub-test")
     local parent_test_name, sub_test_name = test_name:match("^([^/]+)/(.+)$")
 
     if parent_test_name and sub_test_name then
+      logger.debug_context(
+        "adapters.golang",
+        string.format("Parent: %s, Sub: %s", parent_test_name, sub_test_name)
+      )
       -- First find the file containing the parent test
       local file_path, parent_line = find_test_location(parent_test_name, params.cwd, params.module)
       if file_path and parent_line then
+        logger.debug_context(
+          "adapters.golang",
+          string.format("Found parent at %s:%d", file_path, parent_line)
+        )
         -- Load the file into a buffer to search for sub-test location
         local temp_bufnr = vim.fn.bufadd(file_path)
         vim.fn.bufload(temp_bufnr)
@@ -446,26 +518,38 @@ M.find_test_location = function(test_name, params)
         -- Try to find sub-test location (t.Run calls)
         local sub_test_line = ts.find_sub_test_location(temp_bufnr, parent_test_name, sub_test_name)
         if sub_test_line then
-          return file_path .. ":" .. (sub_test_line + 1) -- Convert from 0-based to 1-based
+          local location = file_path .. ":" .. (sub_test_line + 1)
+          logger.debug_context("adapters.golang", string.format("Found sub-test t.Run location: %s", location))
+          return location -- Convert from 0-based to 1-based
         end
 
         -- Try to find table-driven test case location
         local table_test_line = ts.find_table_test_case_location(temp_bufnr, parent_test_name, sub_test_name)
         if table_test_line then
-          return file_path .. ":" .. (table_test_line + 1) -- Convert from 0-based to 1-based
+          local location = file_path .. ":" .. (table_test_line + 1)
+          logger.debug_context("adapters.golang", string.format("Found table test location: %s", location))
+          return location -- Convert from 0-based to 1-based
         end
 
         -- If sub-test location not found, fall back to parent test location
-        return file_path .. ":" .. parent_line
+        local fallback = file_path .. ":" .. parent_line
+        logger.debug_context("adapters.golang", string.format("Sub-test not found, using parent location: %s", fallback))
+        return fallback
+      else
+        logger.debug_context("adapters.golang", "Parent test location not found")
       end
     end
   end
 
   -- Regular test function (not a sub-test)
+  logger.debug_context("adapters.golang", "Searching for regular test function")
   local file_path, line_no = find_test_location(test_name, params.cwd, params.module)
   if file_path and line_no then
-    return file_path .. ":" .. line_no
+    local location = file_path .. ":" .. line_no
+    logger.debug_context("adapters.golang", string.format("Found test location: %s", location))
+    return location
   end
+  logger.debug_context("adapters.golang", "Test location not found")
   return nil
 end
 

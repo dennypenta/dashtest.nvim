@@ -5,6 +5,7 @@ local config = {
   adapters = {},
   ui = {}, -- List of UI consumers
   strategy = "default",
+  debug = false,
 }
 
 ---@class MyModule
@@ -16,6 +17,10 @@ M.config = config
 ---@param args QuicktestConfig?
 M.setup = function(args)
   M.config = vim.tbl_deep_extend("force", M.config, args or {})
+
+  -- Initialize logger
+  local logger = require("quicktest.logger")
+  logger.init(M.config.debug or false)
 
   -- Initialize UI with explicit consumers
   local ui = require("quicktest.ui")

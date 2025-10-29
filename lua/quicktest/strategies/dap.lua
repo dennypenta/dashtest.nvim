@@ -1,5 +1,6 @@
 local storage = require("quicktest.storage")
 local core = require("quicktest.strategies.core")
+local logger = require("quicktest.logger")
 
 local M = {
   name = "dap",
@@ -18,11 +19,14 @@ end
 ---@param opts AdapterRunOpts
 ---@return QuicktestStrategyResult
 M.run = function(adapter, params, config, opts)
+
   if not adapter.build_dap_config then
+    logger.debug_context("strategies.dap", "Adapter missing build_dap_config method")
     error("Adapter does not support DAP strategy - missing build_dap_config method")
   end
 
   local dap = require("dap")
+  logger.debug_context("strategies.dap", "Clearing storage for new DAP run")
   storage.clear()
 
   local handler_id = "quicktest_" .. vim.fn.localtime()
@@ -32,11 +36,13 @@ M.run = function(adapter, params, config, opts)
 
   local output_path = vim.fn.tempname()
   local output_fd = nil
+  logger.debug_context("strategies.dap", string.format("Output path: %s", output_path))
 
   params.output_state = core.create_output_state()
 
   -- Create wrapper send function that converts adapter events to storage calls
   local function adapter_event_to_storage(event)
+    logger.debug_context("strategies.dap", string.format("Adapter event: %s", event.type))
     if event.type == "test_started" then
       storage.test_started(event.test_name, event.location or "")
     elseif event.type == "test_result" then
@@ -77,24 +83,31 @@ M.run = function(adapter, params, config, opts)
   local open_err
   open_err, output_fd = vim.uv.fs_open(output_path, "w", 438)
   if open_err then
+    logger.debug_context("strategies.dap", string.format("Failed to create output file: %s", open_err))
     vim.notify("Failed to create DAP output file: " .. open_err, vim.log.levels.WARN)
     output_fd = nil
+  else
+    logger.debug_context("strategies.dap", "Output file created successfully")
   end
 
   local dap_config = adapter.build_dap_config(params.bufnr, params)
+  logger.debug_context("strategies.dap", string.format("DAP config built: %s", vim.inspect(dap_config)))
 
   -- Emit test started event
   local test_name = dap_config.name or default_test_name
   local test_location = vim.api.nvim_buf_get_name(params.bufnr)
+  logger.debug_context("strategies.dap", string.format("Test started: %s at %s", test_name, test_location))
   storage.test_started(test_name, test_location)
 
   -- Get filetype for DAP configuration
   local test_bufnr = vim.fn.bufnr(params.bufnr)
   local filetype = vim.api.nvim_buf_get_option(test_bufnr, "filetype")
 
+  logger.debug_context("strategies.dap", "Starting DAP session")
   dap.run(vim.tbl_extend("keep", dap_config, { env = dap_config.env, cwd = dap_config.cwd }), {
     filetype = filetype,
     before = function(cfg)
+      logger.debug_context("strategies.dap", "DAP before callback")
       dap.listeners.after.event_output[handler_id] = function(_, body)
         if vim.tbl_contains({ "stdout", "stderr" }, body.category) then
           write_output(body.output)
@@ -102,11 +115,13 @@ M.run = function(adapter, params, config, opts)
       end
 
       dap.listeners.after.event_exited[handler_id] = function(_, info)
+        logger.debug_context("strategies.dap", string.format("DAP exited with code: %d", info.exitCode))
         result_code = info.exitCode
         is_finished = true
 
         -- Emit test finished event
         local status = info.exitCode == 0 and "passed" or "failed"
+        logger.debug_context("strategies.dap", string.format("Test finished: %s [%s]", test_name, status))
         storage.test_finished(test_name, status, nil) -- DAP doesn't track duration directly
 
         if output_fd then
@@ -117,8 +132,10 @@ M.run = function(adapter, params, config, opts)
       return cfg
     end,
     after = function()
+      logger.debug_context("strategies.dap", "DAP after callback")
       local received_exit = result_code ~= nil
       if not received_exit then
+        logger.debug_context("strategies.dap", "No exit event received, marking as passed")
         result_code = 0
         is_finished = true
 
@@ -131,6 +148,7 @@ M.run = function(adapter, params, config, opts)
       end
       dap.listeners.after.event_output[handler_id] = nil
       dap.listeners.after.event_exited[handler_id] = nil
+      logger.debug_context("strategies.dap", "DAP listeners cleaned up")
     end,
   })
 
@@ -152,8 +170,10 @@ M.run = function(adapter, params, config, opts)
       dap.repl.open()
     end,
     stop = function()
+      logger.debug_context("strategies.dap", "Stop called, terminating DAP session")
       dap.terminate()
       if not is_finished then
+        logger.debug_context("strategies.dap", "Marking test as failed due to stop")
         result_code = -1
         is_finished = true
 

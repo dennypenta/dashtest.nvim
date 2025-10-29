@@ -3,6 +3,7 @@ local cmd = require("quicktest.adapters.zig.cmd")
 local fs = require("quicktest.fs_utils")
 local Job = require("plenary.job")
 local adapter_args = require("quicktest.adapters.args")
+local logger = require("quicktest.logger")
 
 local M = {
   name = "zig",
@@ -182,6 +183,8 @@ end
 ---@param send fun(data: CmdData)
 ---@param params ZigRunParams
 M.handle_output = function(line, send, params)
+  logger.debug_context("adapters.zig.output", string.format("Parsing line: %s", line))
+
   -- Strip ANSI color codes for reliable parsing (especially in DAP mode)
   local clean_line = strip_ansi_codes(line)
 
@@ -190,6 +193,7 @@ M.handle_output = function(line, send, params)
   -- Format: 2/5 server_test.test.test http server with SIGTERM...OK
   local ok_full_test_name = clean_line:match("^%d+/%d+ (.-)%.%.%.OK%s*$")
   if ok_full_test_name then
+    logger.debug_context("adapters.zig.output", string.format("Detected passing test: %s", ok_full_test_name))
     -- Extract just the test name (remove the module prefix)
     local test_name = ok_full_test_name:match("%.test%.(.+)$") or ok_full_test_name
 
@@ -200,11 +204,13 @@ M.handle_output = function(line, send, params)
       if tr.name == test_name or tr.name == ok_full_test_name then
         test_index = i
         test_name = tr.name -- Use the actual name from state for events
+        logger.debug_context("adapters.zig.output", string.format("Found test in progress state: %s", test_name))
         break
       end
     end
 
     if not test_index then
+      logger.debug_context("adapters.zig.output", "Test not in progress state, sending test_started")
       -- Send test_started first if test wasn't pre-populated
       send({
         type = "test_started",
@@ -219,9 +225,11 @@ M.handle_output = function(line, send, params)
       if line_no then
         local file_path = vim.api.nvim_buf_get_name(params.bufnr)
         location = file_path .. ":" .. (line_no + 1)
+        logger.debug_context("adapters.zig.output", string.format("Found test location: %s", location))
       end
     end
 
+    logger.debug_context("adapters.zig.output", string.format("Sending test_result: %s [passed]", test_name))
     -- Send test_result for passing test
     send({
       type = "test_result",
@@ -233,6 +241,10 @@ M.handle_output = function(line, send, params)
     -- Remove from state if it was there
     if test_index then
       table.remove(params.output_state.tests_progress, test_index)
+      logger.debug_context(
+        "adapters.zig.output",
+        string.format("Removed test from progress, remaining: %d", #params.output_state.tests_progress)
+      )
     end
 
     return
@@ -244,11 +256,18 @@ M.handle_output = function(line, send, params)
   local full_test_name, error_msg = clean_line:match("^%d+/%d+ (.-)%.%.%.FAIL %((.+)%)%s*$")
 
   if full_test_name then
+    logger.debug_context(
+      "adapters.zig.output",
+      string.format("Detected failing test: %s, error: %s", full_test_name, error_msg)
+    )
     -- Extract just the test name (remove the module prefix)
     -- Format is typically: "module.test.test_name" or "test.test.test_name"
     local test_name = full_test_name:match("%.test%.(.+)$") or full_test_name
     params.output_state.current_failing_test = test_name
     params.output_state.current_error_message = error_msg
+
+    logger.debug_context("adapters.zig.output", string.format("Extracted test name: %s", test_name))
+    logger.debug_context("adapters.zig.output", "Waiting for stack trace to get location")
 
     -- Find test in results array
     local test_result = nil
@@ -263,6 +282,7 @@ M.handle_output = function(line, send, params)
     if not test_result or test_result.status ~= "failed" then
       -- Send test_started first if we haven't seen this test before
       if not test_result then
+        logger.debug_context("adapters.zig.output", "Test not in progress, adding to state and sending test_started")
         -- Send "running" status to storage (semantic: test was running when we became aware of it)
         send({
           type = "test_started",
@@ -276,6 +296,7 @@ M.handle_output = function(line, send, params)
           status = "failed", -- Parsing state: "saw FAIL, waiting for location line"
         })
       else
+        logger.debug_context("adapters.zig.output", "Test in progress, marking as failed in parsing state")
         -- Don't send test_result yet - wait for stack trace to get location
         test_result.status = "failed"
       end
@@ -343,15 +364,27 @@ M.handle_output = function(line, send, params)
   if params.output_state.current_failing_test then
     -- Only process lines that start with a path (stack trace lines)
     if clean_line:match("^/") then
+      logger.debug_context(
+        "adapters.zig.output",
+        string.format("Parsing stack trace for test: %s", params.output_state.current_failing_test)
+      )
       -- Escape special pattern characters in test name for matching
       local escaped_test_name = params.output_state.current_failing_test:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
       -- Match line that contains "in test.<exact_test_name>"
       local pattern = "^([^:]+%.zig):(%d+):%d+:.* in test%." .. escaped_test_name .. " %("
       local file_path, line_str = clean_line:match(pattern)
       if file_path and line_str then
+        logger.debug_context(
+          "adapters.zig.output",
+          string.format("Found test location in stack trace: %s:%s", file_path, line_str)
+        )
         local line_no = tonumber(line_str)
 
         -- Send assert_failure event for quickfix list
+        logger.debug_context(
+          "adapters.zig.output",
+          string.format("Sending assert_failure: %s at %s:%d", params.output_state.current_failing_test, file_path, line_no)
+        )
         send({
           type = "assert_failure",
           test_name = params.output_state.current_failing_test,
@@ -362,6 +395,10 @@ M.handle_output = function(line, send, params)
 
         -- Also send test_result with location
         local location = file_path .. ":" .. line_str
+        logger.debug_context(
+          "adapters.zig.output",
+          string.format("Sending test_result: %s [failed] at %s", params.output_state.current_failing_test, location)
+        )
         send({
           type = "test_result",
           test_name = params.output_state.current_failing_test,
@@ -373,10 +410,15 @@ M.handle_output = function(line, send, params)
         for i, tr in ipairs(params.output_state.tests_progress) do
           if tr.name == params.output_state.current_failing_test then
             table.remove(params.output_state.tests_progress, i)
+            logger.debug_context(
+              "adapters.zig.output",
+              string.format("Removed test from progress, remaining: %d", #params.output_state.tests_progress)
+            )
             break
           end
         end
 
+        logger.debug_context("adapters.zig.output", "Resetting current_failing_test state")
         params.output_state.current_failing_test = nil -- Reset after finding location
         params.output_state.current_error_message = nil
       end
@@ -388,9 +430,13 @@ end
 ---@param send fun(data: CmdData)
 ---@return integer
 M.run = function(params, send)
+
   local args = M.build_cmd(params)
+  logger.debug_context("adapters.zig", string.format("Command args: %s", vim.inspect(args)))
 
   local bin = M.get_bin(params.bufnr)
+  logger.debug_context("adapters.zig", string.format("Binary: %s", bin))
+
   local env = adapter_args.merge_env(M.options, params.bufnr)
 
   local job = Job:new({
@@ -407,6 +453,7 @@ M.run = function(params, send)
       send({ type = "stdout", raw = data, output = data })
     end,
     on_exit = function(_, return_val)
+      logger.debug_context("adapters.zig", string.format("Job exited with code: %d", return_val))
       send({ type = "exit", code = return_val })
     end,
   })
@@ -415,6 +462,7 @@ M.run = function(params, send)
   ---@type integer
   ---@diagnostic disable-next-line: assign-type-mismatch
   local pid = job.pid
+  logger.debug_context("adapters.zig", string.format("Job started with PID: %d", pid))
 
   return pid
 end

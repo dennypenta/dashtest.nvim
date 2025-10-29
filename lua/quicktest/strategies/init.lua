@@ -1,4 +1,5 @@
 local M = {}
+local logger = require("quicktest.logger")
 
 ---@class QuicktestStrategyResult
 ---@field is_complete fun(): boolean
@@ -17,6 +18,7 @@ local strategies = {}
 local loaded = false
 
 M.register = function(strategy)
+  logger.debug_context("strategies.init", string.format("Registering strategy: %s", strategy.name))
   strategies[strategy.name] = strategy
 end
 
@@ -34,7 +36,10 @@ M.get_available = function()
   local available = {}
   for name, strategy in pairs(strategies) do
     if strategy.is_available() then
+      logger.debug_context("strategies.init", string.format("Strategy available: %s", name))
       available[name] = strategy
+    else
+      logger.debug_context("strategies.init", string.format("Strategy not available: %s", name))
     end
   end
   return available
@@ -42,11 +47,14 @@ end
 
 M.load_strategies = function()
   if loaded then
+    logger.debug_context("strategies.init", "Strategies already loaded")
     return
   end
   loaded = true
+  logger.debug_context("strategies.init", "Loading default strategy")
   local d = require("quicktest.strategies.default")
   M.register(d)
+  logger.debug_context("strategies.init", "Loading dap strategy")
   local dap = require("quicktest.strategies.dap")
   M.register(dap)
 end

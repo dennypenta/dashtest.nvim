@@ -3,6 +3,7 @@ local notify = require("quicktest.notify")
 local a = require("plenary.async")
 local u = require("plenary.async.util")
 local core = require("quicktest.strategies.core")
+local logger = require("quicktest.logger")
 
 local M = {
   name = "default",
@@ -14,6 +15,7 @@ local current_job = nil
 -- Expose kill function for external access
 M.kill_current_run = function()
   if current_job and current_job.pid then
+    logger.debug_context("strategies.default", string.format("Killing job with PID: %d", current_job.pid))
     local job = current_job
     vim.system({ "kill", tostring(current_job.pid) }):wait()
     current_job = nil
@@ -22,6 +24,9 @@ M.kill_current_run = function()
     local time_display = string.format("%.2f", passedTime / 1000) .. "s"
 
     storage.test_output("status", "Cancelled after " .. time_display)
+    logger.debug_context("strategies.default", string.format("Job cancelled after %s", time_display))
+  else
+    logger.debug_context("strategies.default", "No current job to kill")
   end
 end
 
@@ -32,19 +37,23 @@ end
 M.run = function(adapter, params, config, opts)
   if current_job then
     if current_job.pid then
+      logger.debug_context("strategies.default", "Killing existing job before starting new one")
       vim.system({ "kill", tostring(current_job.pid) }):wait()
       current_job = nil
     else
+      logger.debug_context("strategies.default", "Job already running, returning early")
       return notify.warn("Already running")
     end
   end
 
   -- Clear storage for new run
+  logger.debug_context("strategies.default", "Clearing storage for new run")
   storage.clear()
 
   --- @type {id: number, started_at: number, pid: number?, exit_code: number?}
   local job = { id = math.random(10000000000000000), started_at = vim.uv.now() }
   current_job = job
+  logger.debug_context("strategies.default", string.format("Created new job with ID: %d", job.id))
 
   local is_running = function()
     return current_job and job.id == current_job.id
@@ -53,11 +62,13 @@ M.run = function(adapter, params, config, opts)
   params.output_state = core.create_output_state()
 
   local runLoop = function()
+    logger.debug_context("strategies.default", "Starting run loop")
     local sender, receiver = a.control.channel.mpsc()
     local pid = adapter.run(params, function(data)
       sender.send(data)
     end)
     job.pid = pid
+    logger.debug_context("strategies.default", string.format("Adapter started with PID: %d", pid))
 
     -- Start test event
     local test_name = "Test"
@@ -74,6 +85,7 @@ M.run = function(adapter, params, config, opts)
       end
     end
 
+    logger.debug_context("strategies.default", string.format("Test started: %s at %s", test_name, test_location))
     storage.test_started(test_name, test_location)
 
     local results = {}
@@ -88,6 +100,7 @@ M.run = function(adapter, params, config, opts)
     while is_running() or (job_done and events_after_exit < MAX_EVENTS_AFTER_EXIT) do
       local result = receiver.recv()
       if not result then
+        logger.debug_context("strategies.default", "No more events, breaking loop")
         break -- Channel closed or no more events
       end
 
@@ -96,6 +109,7 @@ M.run = function(adapter, params, config, opts)
       u.scheduler()
 
       if result.type == "exit" then
+        logger.debug_context("strategies.default", string.format("Exit event received with code: %d", result.code))
         job.exit_code = result.code
         current_job = nil
         job_done = true
@@ -103,9 +117,14 @@ M.run = function(adapter, params, config, opts)
         -- Emit test finished event
         local status = result.code == 0 and "passed" or "failed"
         local duration = vim.uv.now() - job.started_at
+        logger.debug_context(
+          "strategies.default",
+          string.format("Test finished: %s [%s] in %dms", test_name, status, duration)
+        )
         storage.test_finished(test_name, status, duration)
 
         if adapter.after_run then
+          logger.debug_context("strategies.default", "Running adapter after_run hook")
           adapter.after_run(params, results)
         end
       end
@@ -128,6 +147,7 @@ M.run = function(adapter, params, config, opts)
       elseif result.type == "stderr" and result.output then
         storage.test_output("stderr", result.output)
       elseif result.type == "test_started" then
+        logger.debug_context("strategies.default", string.format("Event: test_started [%s]", result.test_name))
         -- Handle individual test start from adapter
         -- Use location from event if provided, otherwise try to find it
         local location = result.location or ""
@@ -136,6 +156,10 @@ M.run = function(adapter, params, config, opts)
         end
         storage.test_started(result.test_name, location)
       elseif result.type == "test_result" then
+        logger.debug_context(
+          "strategies.default",
+          string.format("Event: test_result [%s] status=%s", result.test_name, result.status)
+        )
         -- Handle individual test results from adapter
         -- Use location from event if provided, otherwise try to find it
         local location = result.location or ""
@@ -145,21 +169,30 @@ M.run = function(adapter, params, config, opts)
         -- Mark test as finished (it should already exist from test_started)
         storage.test_finished(result.test_name, result.status, nil, location)
       elseif result.type == "assert_failure" then
+        logger.debug_context(
+          "strategies.default",
+          string.format("Event: assert_failure [%s] at %s:%d", result.test_name, result.full_path, result.line)
+        )
         -- Handle assert failure location information
         storage.assert_failure(result.test_name, result.full_path, result.line, result.message)
       elseif result.type == "assert_error" then
+        logger.debug_context("strategies.default", string.format("Event: assert_error [%s]", result.test_name))
         -- Handle assert error message (main error description)
         storage.assert_error(result.test_name, result.message)
       elseif result.type == "assert_message" then
+        logger.debug_context("strategies.default", string.format("Event: assert_message [%s]", result.test_name))
         -- Handle assert failure message to override previous message
         storage.assert_message(result.test_name, result.message)
       end
     end
+    logger.debug_context("strategies.default", "Run loop completed")
   end
 
   ---@diagnostic disable-next-line: missing-parameter
   a.run(function()
     xpcall(runLoop, function(err)
+      logger.debug_context("strategies.default", string.format("Error in async job: %s", err))
+      logger.debug_context("strategies.default", string.format("Stack trace: %s", debug.traceback()))
       print("Error in async job:", err)
       print("Stack trace:", debug.traceback())
 
