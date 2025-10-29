@@ -279,6 +279,28 @@ function M.prepare_and_run(config, type, mode, adapter_name, opts)
 
   return M.run(adapter, params, mode, config, opts)
 end
+
+--- Run tests with pre-computed params
+--- This ensures consistency when cursor position might change between build and run
+--- @param config QuicktestConfig
+--- @param adapter_name Adapter
+--- @param mode WinMode
+--- @param params RunParams
+--- @param opts AdapterRunOpts
+--- @return QuicktestStrategyResult?
+function M.run_with_params(config, adapter_name, mode, params, opts)
+  --- @type QuicktestAdapter
+  local adapter = adapter_name == "auto" and get_adapter(config, "line")
+    or get_adapter_by_name(config.adapters, adapter_name)
+
+  if not adapter then
+    notify.warn("Failed to test: no suitable adapter found.")
+    return nil
+  end
+
+  return M.run(adapter, params, mode, config, opts)
+end
+
 --- @param config QuicktestConfig
 --- @param mode WinMode?
 --- @return QuicktestStrategyResult?
@@ -342,7 +364,7 @@ end
 --- @param type string
 --- @param adapter_name Adapter
 --- @param opts AdapterRunOpts?
---- @return string[] | nil
+--- @return string[] | nil, RunParams | nil
 function M.get_build_command(config, type, adapter_name, opts)
   opts = opts or {}
   local current_buffer = api.nvim_get_current_buf()
@@ -352,12 +374,12 @@ function M.get_build_command(config, type, adapter_name, opts)
   local adapter, params, error = get_adapter_and_params(config, type, adapter_name, current_buffer, cursor_pos, opts)
 
   if error ~= nil or adapter == nil or params == nil then
-    return nil
+    return nil, nil
   end
 
   -- Check if adapter supports build_cmd
   if not adapter.build_cmd then
-    return nil
+    return nil, nil
   end
 
   local args = { adapter.get_bin(params.bufnr) }
@@ -365,7 +387,7 @@ function M.get_build_command(config, type, adapter_name, opts)
     table.insert(args, arg)
   end
 
-  return args
+  return args, params
 end
 
 return M

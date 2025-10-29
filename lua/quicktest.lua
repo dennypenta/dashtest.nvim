@@ -60,6 +60,16 @@ M.run_all = function(mode, adapter, opts)
   return module.prepare_and_run(M.config, "all", mode or "auto", adapter or "auto", opts or {})
 end
 
+--- Run tests with pre-computed params
+--- This ensures consistency when cursor position might change between build and run
+--- @param mode WinMode?
+--- @param adapter Adapter?
+--- @param params RunParams
+--- @param opts AdapterRunOpts?
+M.run_cmd = function(mode, adapter, params, opts)
+  return module.run_with_params(M.config, mode or "auto", adapter or "auto", params, opts or {})
+end
+
 M.cancel_current_run = function()
   module.kill_current_run()
 end
@@ -68,7 +78,7 @@ end
 --- This allows external tools (like compile.nvim) to get the build command before running DAP
 --- @param adapter Adapter?
 --- @param opts AdapterRunOpts?
---- @return string[] | nil
+--- @return string[] | nil, RunParams | nil
 M.get_build_line = function(adapter, opts)
   return module.get_build_command(M.config, "line", adapter or "auto", opts or {})
 end
@@ -77,7 +87,7 @@ end
 --- This allows external tools (like compile.nvim) to get the build command before running DAP
 --- @param adapter Adapter?
 --- @param opts AdapterRunOpts?
---- @return string[] | nil
+--- @return string[] | nil, RunParams | nil
 M.get_build_file = function(adapter, opts)
   return module.get_build_command(M.config, "file", adapter or "auto", opts or {})
 end
@@ -86,7 +96,7 @@ end
 --- This allows external tools (like compile.nvim) to get the build command before running DAP
 --- @param adapter Adapter?
 --- @param opts AdapterRunOpts?
---- @return string[] | nil
+--- @return string[] | nil, RunParams | nil
 M.get_build_dir = function(adapter, opts)
   return module.get_build_command(M.config, "dir", adapter or "auto", opts or {})
 end
@@ -95,7 +105,7 @@ end
 --- This allows external tools (like compile.nvim) to get the build command before running DAP
 --- @param adapter Adapter?
 --- @param opts AdapterRunOpts?
---- @return string[] | nil
+--- @return string[] | nil, RunParams | nil
 M.get_build_all = function(adapter, opts)
   return module.get_build_command(M.config, "all", adapter or "auto", opts or {})
 end
