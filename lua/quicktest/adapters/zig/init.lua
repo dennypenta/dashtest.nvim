@@ -2,6 +2,7 @@ local ts = require("quicktest.adapters.zig.ts")
 local cmd = require("quicktest.adapters.zig.cmd")
 local fs = require("quicktest.fs_utils")
 local adapter_args = require("quicktest.adapters.args")
+local core = require("quicktest.strategies.core")
 local logger = require("quicktest.logger")
 
 local M = {
@@ -9,6 +10,10 @@ local M = {
   ---@type AdapterOptions
   options = {},
 }
+
+local function extract_test_name(full_name)
+  return full_name:match("%.test%.(.+)$") or full_name
+end
 
 --- Strip ANSI color codes from a string
 --- @param str string
@@ -197,6 +202,58 @@ M.build_cmd = function(params)
   return args
 end
 
+--- Find test in progress array by name
+--- @param test_name string
+--- @param full_name string
+--- @param state table
+--- @return integer?, table?
+function M.find_test_in_state(state, test_name, full_name)
+  for i, tr in ipairs(state.tests_progress) do
+    if tr.name == test_name or tr.name == full_name then
+      return i, tr
+    end
+  end
+  return nil, nil
+end
+
+--- Resolve test location via treesitter
+--- @param bufnr integer
+--- @param test_name string
+--- @return string?
+local function resolve_test_location(bufnr, test_name)
+  if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+    local line_no = ts.get_test_def_line_no(bufnr, test_name)
+    if line_no then
+      local file_path = vim.api.nvim_buf_get_name(bufnr)
+      return file_path .. ":" .. (line_no + 1)
+    end
+  end
+  return nil
+end
+
+--- Send test result with location resolution
+--- @param test_name string
+--- @param status string
+--- @param bufnr integer
+--- @param location string?
+--- @param send fun(data: CmdData)
+local function send_test_result_with_location(test_name, status, bufnr, location, send)
+  if not location then
+    location = resolve_test_location(bufnr, test_name)
+    if location then
+      logger.debug_context("adapters.zig.output", string.format("Found test location: %s", location))
+    end
+  end
+
+  logger.debug_context("adapters.zig.output", string.format("Sending test_result: %s [%s]", test_name, status))
+  send({
+    type = "test_result",
+    test_name = test_name,
+    status = status,
+    location = location,
+  })
+end
+
 ---Parse a single line of Zig test plain text output and send structured events
 ---@param line string
 ---@param send fun(data: CmdData)
@@ -213,19 +270,14 @@ M.handle_output = function(line, send, params)
   local ok_full_test_name = clean_line:match("^%d+/%d+ (.-)%.%.%.OK%s*$")
   if ok_full_test_name then
     logger.debug_context("adapters.zig.output", string.format("Detected passing test: %s", ok_full_test_name))
-    -- Extract just the test name (remove the module prefix)
-    local test_name = ok_full_test_name:match("%.test%.(.+)$") or ok_full_test_name
 
-    -- Find test in state by matching BOTH extracted name and full name
-    local test_index = nil
-    local location = nil
-    for i, tr in ipairs(params.output_state.tests_progress) do
-      if tr.name == test_name or tr.name == ok_full_test_name then
-        test_index = i
-        test_name = tr.name -- Use the actual name from state for events
-        logger.debug_context("adapters.zig.output", string.format("Found test in progress state: %s", test_name))
-        break
-      end
+    local test_name = extract_test_name(ok_full_test_name)
+    local test_index, test_result = core.find_test_in_state(test_name, ok_full_test_name, params.output_state)
+
+    -- Use the actual name from state if found
+    if test_result then
+      test_name = test_result.name
+      logger.debug_context("adapters.zig.output", string.format("Found test in progress state: %s", test_name))
     end
 
     if not test_index then
@@ -238,26 +290,8 @@ M.handle_output = function(line, send, params)
       })
     end
 
-    -- Try to find location using treesitter
-    if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
-      local line_no = ts.get_test_def_line_no(params.bufnr, test_name)
-      if line_no then
-        local file_path = vim.api.nvim_buf_get_name(params.bufnr)
-        location = file_path .. ":" .. (line_no + 1)
-        logger.debug_context("adapters.zig.output", string.format("Found test location: %s", location))
-      end
-    end
+    send_test_result_with_location(test_name, "passed", params.bufnr, nil, send)
 
-    logger.debug_context("adapters.zig.output", string.format("Sending test_result: %s [passed]", test_name))
-    -- Send test_result for passing test
-    send({
-      type = "test_result",
-      test_name = test_name,
-      status = "passed",
-      location = location,
-    })
-
-    -- Remove from state if it was there
     if test_index then
       table.remove(params.output_state.tests_progress, test_index)
       logger.debug_context(
@@ -279,23 +313,15 @@ M.handle_output = function(line, send, params)
       "adapters.zig.output",
       string.format("Detected failing test: %s, error: %s", full_test_name, error_msg)
     )
-    -- Extract just the test name (remove the module prefix)
-    -- Format is typically: "module.test.test_name" or "test.test.test_name"
-    local test_name = full_test_name:match("%.test%.(.+)$") or full_test_name
+
+    local test_name = extract_test_name(full_test_name)
     params.output_state.current_failing_test = test_name
     params.output_state.current_error_message = error_msg
 
     logger.debug_context("adapters.zig.output", string.format("Extracted test name: %s", test_name))
     logger.debug_context("adapters.zig.output", "Waiting for stack trace to get location")
 
-    -- Find test in results array
-    local test_result = nil
-    for _, tr in ipairs(params.output_state.tests_progress) do
-      if tr.name == test_name then
-        test_result = tr
-        break
-      end
-    end
+    local _, test_result = core.find_test_in_state(test_name, full_test_name, params.output_state)
 
     -- Only mark test as failed if we haven't already
     if not test_result or test_result.status ~= "failed" then
@@ -327,23 +353,17 @@ M.handle_output = function(line, send, params)
   -- Format: 2/2 server_test.test.333...SKIP
   local skip_test_name = clean_line:match("^%d+/%d+ (.-)%.%.%.SKIP%s*$")
   if skip_test_name then
-    -- Extract just the test name (remove the module prefix)
-    local test_name = skip_test_name:match("%.test%.(.+)$") or skip_test_name
+    local test_name = extract_test_name(skip_test_name)
+    local test_index, test_result = core.find_test_in_state(params.output_state, test_name, skip_test_name)
 
-    -- Find test in state by matching BOTH extracted name and full name
-    -- (pre-populated tests might use either format depending on treesitter)
-    local test_index = nil
-    local location = nil
-    for i, tr in ipairs(params.output_state.tests_progress) do
-      if tr.name == test_name or tr.name == skip_test_name then
-        test_index = i
-        test_name = tr.name -- Use the actual name from state for events
-        break
-      end
+    -- Use the actual name from state if found
+    if test_result then
+      test_name = test_result.name
     end
 
     -- If test wasn't pre-populated, send test_started first
     if not test_index then
+      logger.debug_context("adapters.zig.output", "Test not in progress state, sending test_started")
       send({
         type = "test_started",
         test_name = test_name,
@@ -351,24 +371,8 @@ M.handle_output = function(line, send, params)
       })
     end
 
-    -- Try to find location using treesitter
-    if params.bufnr and vim.api.nvim_buf_is_valid(params.bufnr) then
-      local line_no = ts.get_test_def_line_no(params.bufnr, test_name)
-      if line_no then
-        local file_path = vim.api.nvim_buf_get_name(params.bufnr)
-        location = file_path .. ":" .. (line_no + 1)
-      end
-    end
+    send_test_result_with_location(test_name, "skipped", params.bufnr, nil, send)
 
-    -- Send test_result for skipped test
-    send({
-      type = "test_result",
-      test_name = test_name,
-      status = "skipped",
-      location = location,
-    })
-
-    -- Remove from state if it was there
     if test_index then
       table.remove(params.output_state.tests_progress, test_index)
     end
@@ -419,28 +423,10 @@ M.handle_output = function(line, send, params)
 
         -- Also send test_result with location
         local location = file_path .. ":" .. line_str
-        logger.debug_context(
-          "adapters.zig.output",
-          string.format("Sending test_result: %s [failed] at %s", params.output_state.current_failing_test, location)
-        )
-        send({
-          type = "test_result",
-          test_name = params.output_state.current_failing_test,
-          status = "failed",
-          location = location,
-        })
+        send_test_result_with_location(params.output_state.current_failing_test, "failed", params.bufnr, location, send)
 
         -- Remove completed test from state (no longer needed for parsing)
-        for i, tr in ipairs(params.output_state.tests_progress) do
-          if tr.name == params.output_state.current_failing_test then
-            table.remove(params.output_state.tests_progress, i)
-            logger.debug_context(
-              "adapters.zig.output",
-              string.format("Removed test from progress, remaining: %d", #params.output_state.tests_progress)
-            )
-            break
-          end
-        end
+        core.remove_test_from_state(params.output_state, params.output_state.current_failing_test)
 
         logger.debug_context("adapters.zig.output", "Resetting current_failing_test state")
         params.output_state.current_failing_test = nil -- Reset after finding location

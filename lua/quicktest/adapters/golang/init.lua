@@ -3,6 +3,7 @@ local cmd = require("quicktest.adapters.golang.cmd")
 local fs = require("quicktest.fs_utils")
 local adapter_args = require("quicktest.adapters.args")
 local logger = require("quicktest.logger")
+local core = require("quicktest.strategies.core")
 
 local M = {
   name = "go",
@@ -271,18 +272,7 @@ M.handle_output = function(line, send, params)
       location = location,
     })
 
-    -- Remove completed test from state (no longer needed for parsing)
-    for i, test_result in ipairs(params.output_state.tests_progress) do
-      if test_result.name == test_name then
-        table.remove(params.output_state.tests_progress, i)
-        logger.debug_context(
-          "adapters.golang.output",
-          string.format("Removed test from progress, remaining: %d", #params.output_state.tests_progress)
-        )
-        break
-      end
-    end
-
+    core.remove_test_from_state(params.output_state, test_name)
     return
   end
 

@@ -36,6 +36,7 @@ local M = {}
 ---@field get_bin fun(bufnr: integer): string
 ---@field build_cmd fun(params: any): string[]
 ---@field handle_output fun(line: string, send: fun(data: CmdData), params: RunParams)
+---@field find_test_location fun(test_name: string, params: RunParams): string?
 
 ---@class QuicktestUI
 ---@field name string

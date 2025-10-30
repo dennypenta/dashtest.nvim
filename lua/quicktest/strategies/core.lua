@@ -1,3 +1,4 @@
+local logger = require("quicktest.logger")
 local M = {}
 
 --- Test result entry with name, status, and metadata
@@ -40,6 +41,22 @@ M.create_output_state = function()
     current_failing_test = nil,
     current_error_message = nil,
   }
+end
+
+--- Remove completed test from state
+--- @param state table
+--- @param test_name string
+function M.remove_test_from_state(state, test_name)
+  for i, tr in ipairs(state.tests_progress) do
+    if tr.name == test_name then
+      table.remove(state.tests_progress, i)
+      logger.debug_context(
+        "adapters.output",
+        string.format("Removed test from progress, remaining: %d", #state.tests_progress)
+      )
+      break
+    end
+  end
 end
 
 --- Creates an immediate event handler for adapter.handle_output()

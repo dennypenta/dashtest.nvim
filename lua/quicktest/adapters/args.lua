@@ -76,7 +76,7 @@ end
 ---@field env (fun(bufnr: integer, current: table<string, string>): table<string, string>)?
 ---@field is_enabled (fun(bufnr: integer, type: RunType, current: boolean): boolean)?
 ---@field test_filter_option (fun(bufnr: integer, current: string): string)?
----@field dap (fun(bufnr: integer, params: GoRunParams): table)?
+---@field dap (fun(bufnr: integer, params: RunParams): table)?
 
 local default_dap_opt = function(bufnr, params)
   return {
