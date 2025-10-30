@@ -50,6 +50,8 @@ M.run = function(adapter, params, config, opts)
 
   params.output_state = core.create_output_state()
 
+  local line_buffer = ""
+
   -- Create wrapper send function that converts adapter events to storage calls
   local function adapter_event_to_storage(event)
     logger.debug_context("strategies.dap", string.format("Adapter event: %s", event.type))
@@ -74,7 +76,15 @@ M.run = function(adapter, params, config, opts)
 
     -- Use adapter's handle_output if available, otherwise skip parsing
     if adapter.handle_output then
-      local lines = vim.split(data, "\n", { plain = true })
+      line_buffer = line_buffer .. data
+      local lines = vim.split(line_buffer, "\n", { plain = true })
+      -- If data doesn't end with newline, last element is incomplete - keep it in buffer
+      if not data:match("\n$") then
+        line_buffer = lines[#lines]
+        table.remove(lines, #lines)
+      else
+        line_buffer = ""
+      end
       for _, line in ipairs(lines) do
         if line ~= "" then
           logger.debug_context("strategies.dap", string.format("Passing line to adapter: %s", line))

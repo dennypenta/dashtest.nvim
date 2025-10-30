@@ -318,6 +318,8 @@ return function(opts)
     end
 
     local results = storage.get_current_results()
+    local logger = require("quicktest.logger")
+    logger.debug_context("ui.summary", string.format("update_display called, test count: %d", #results))
     local summary = storage.get_run_summary()
 
     -- Get all actual tests for counting (not status lines)
