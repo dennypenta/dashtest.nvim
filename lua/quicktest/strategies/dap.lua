@@ -12,7 +12,7 @@ M.is_available = function()
 end
 
 ---@param adapter QuicktestAdapter
----@param params any
+---@param params RunParams
 ---@param config QuicktestConfig
 ---@param opts AdapterRunOpts
 ---@return QuicktestStrategyResult

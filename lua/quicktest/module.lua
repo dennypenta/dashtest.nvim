@@ -35,6 +35,7 @@ local M = {}
 ---@field build_dap_config? fun(bufnr: integer, params: any): table
 ---@field get_bin fun(bufnr: integer): string
 ---@field build_cmd fun(params: any): string[]
+---@field handle_output fun(line: string, send: fun(data: CmdData), params: RunParams)
 
 ---@class QuicktestUI
 ---@field name string
