@@ -1,7 +1,6 @@
 local ts = require("quicktest.adapters.golang.ts")
 local cmd = require("quicktest.adapters.golang.cmd")
 local fs = require("quicktest.fs_utils")
-local Job = require("plenary.job")
 local adapter_args = require("quicktest.adapters.args")
 local logger = require("quicktest.logger")
 
@@ -209,10 +208,7 @@ M.handle_output = function(line, send, params)
   -- Check for test start (=== RUN)
   local run_test_name = line:match("^=== RUN%s+(.+)$")
   if run_test_name then
-    logger.debug_context(
-      "adapters.golang.output",
-      string.format("Detected test start: %s", run_test_name)
-    )
+    logger.debug_context("adapters.golang.output", string.format("Detected test start: %s", run_test_name))
     -- Test started - track it and send event
     table.insert(params.output_state.tests_progress, {
       name = run_test_name,
@@ -287,7 +283,6 @@ M.handle_output = function(line, send, params)
       end
     end
 
-
     return
   end
 
@@ -296,10 +291,7 @@ M.handle_output = function(line, send, params)
   -- Pattern: "Error Trace:" with full path - most important for location
   local full_path, line_str = line:match("Error Trace:%s*([^:]+):(%d+)")
   if full_path and line_str then
-    logger.debug_context(
-      "adapters.golang.output",
-      string.format("Detected Error Trace: %s:%s", full_path, line_str)
-    )
+    logger.debug_context("adapters.golang.output", string.format("Detected Error Trace: %s:%s", full_path, line_str))
     local line_no = tonumber(line_str)
     -- Associate with the most recent running test
     local current_test = nil
@@ -385,37 +377,17 @@ end
 ---@return integer
 M.run = function(params, send)
   local args = M.build_cmd(params)
-  logger.debug_context("adapters.golang", string.format("Command args: %s", vim.inspect(args)))
-
   local bin = M.get_bin(params.bufnr)
-  logger.debug_context("adapters.golang", string.format("Binary: %s", bin))
-
   local env = adapter_args.merge_env(M.options, params.bufnr)
 
-  local job = Job:new({
-    command = bin,
+  return adapter_args.run_job({
+    adapter_name = "adapters.golang",
+    bin = bin,
     args = args,
     env = env,
     cwd = params.cwd,
-    on_stdout = function(_, data)
-      send({ type = "stdout", raw = data, output = data })
-    end,
-    on_stderr = function(_, data)
-      send({ type = "stderr", raw = data, output = data })
-    end,
-    on_exit = function(_, return_val)
-      logger.debug_context("adapters.golang", string.format("Job exited with code: %d", return_val))
-      send({ type = "exit", code = return_val })
-    end,
+    send = send,
   })
-  job:start()
-
-  ---@type integer
-  ---@diagnostic disable-next-line: assign-type-mismatch
-  local pid = job.pid
-  logger.debug_context("adapters.golang", string.format("Job started with PID: %d", pid))
-
-  return pid
 end
 
 M.title = function(params)
@@ -455,17 +427,11 @@ M.find_test_location = function(test_name, params)
     local parent_test_name, sub_test_name = test_name:match("^([^/]+)/(.+)$")
 
     if parent_test_name and sub_test_name then
-      logger.debug_context(
-        "adapters.golang",
-        string.format("Parent: %s, Sub: %s", parent_test_name, sub_test_name)
-      )
+      logger.debug_context("adapters.golang", string.format("Parent: %s, Sub: %s", parent_test_name, sub_test_name))
       -- First find the file containing the parent test
       local file_path, parent_line = find_test_location(parent_test_name, params.cwd, params.module)
       if file_path and parent_line then
-        logger.debug_context(
-          "adapters.golang",
-          string.format("Found parent at %s:%d", file_path, parent_line)
-        )
+        logger.debug_context("adapters.golang", string.format("Found parent at %s:%d", file_path, parent_line))
         -- Load the file into a buffer to search for sub-test location
         local temp_bufnr = vim.fn.bufadd(file_path)
         vim.fn.bufload(temp_bufnr)
@@ -488,7 +454,10 @@ M.find_test_location = function(test_name, params)
 
         -- If sub-test location not found, fall back to parent test location
         local fallback = file_path .. ":" .. parent_line
-        logger.debug_context("adapters.golang", string.format("Sub-test not found, using parent location: %s", fallback))
+        logger.debug_context(
+          "adapters.golang",
+          string.format("Sub-test not found, using parent location: %s", fallback)
+        )
         return fallback
       else
         logger.debug_context("adapters.golang", "Parent test location not found")

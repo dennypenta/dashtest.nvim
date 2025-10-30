@@ -1,7 +1,6 @@
 local ts = require("quicktest.adapters.zig.ts")
 local cmd = require("quicktest.adapters.zig.cmd")
 local fs = require("quicktest.fs_utils")
-local Job = require("plenary.job")
 local adapter_args = require("quicktest.adapters.args")
 local logger = require("quicktest.logger")
 
@@ -88,17 +87,23 @@ M.build_file_run_params = function(bufnr, cursor_pos, opts)
 
   local func_names = ts.get_test_names(bufnr)
 
-  logger.debug_context("adapters.zig", string.format("build_file_run_params: %s", vim.inspect({
-    bufnr = bufnr,
-    buf_valid = vim.api.nvim_buf_is_valid(bufnr),
-    buf_loaded = vim.api.nvim_buf_is_loaded(bufnr),
-    buf_name = vim.api.nvim_buf_get_name(bufnr),
-    filetype = vim.api.nvim_buf_get_option(bufnr, "filetype"),
-    cwd = cwd,
-    test_count = func_names and #func_names or 0,
-    func_names = func_names or {},
-    opts = opts,
-  })))
+  logger.debug_context(
+    "adapters.zig",
+    string.format(
+      "build_file_run_params: %s",
+      vim.inspect({
+        bufnr = bufnr,
+        buf_valid = vim.api.nvim_buf_is_valid(bufnr),
+        buf_loaded = vim.api.nvim_buf_is_loaded(bufnr),
+        buf_name = vim.api.nvim_buf_get_name(bufnr),
+        filetype = vim.api.nvim_buf_get_option(bufnr, "filetype"),
+        cwd = cwd,
+        test_count = func_names and #func_names or 0,
+        func_names = func_names or {},
+        opts = opts,
+      })
+    )
+  )
 
   if not func_names or #func_names == 0 then
     return nil, "No tests to run"
@@ -156,7 +161,8 @@ M.build_all_run_params = function(bufnr, cursor_pos, opts)
     bufnr = bufnr,
     cursor_pos = cursor_pos,
     opts = opts,
-  }, nil
+  },
+    nil
 end
 
 ---@param bufnr integer
@@ -396,7 +402,12 @@ M.handle_output = function(line, send, params)
         -- Send assert_failure event for quickfix list
         logger.debug_context(
           "adapters.zig.output",
-          string.format("Sending assert_failure: %s at %s:%d", params.output_state.current_failing_test, file_path, line_no)
+          string.format(
+            "Sending assert_failure: %s at %s:%d",
+            params.output_state.current_failing_test,
+            file_path,
+            line_no
+          )
         )
         send({
           type = "assert_failure",
@@ -443,41 +454,18 @@ end
 ---@param send fun(data: CmdData)
 ---@return integer
 M.run = function(params, send)
-
   local args = M.build_cmd(params)
-  logger.debug_context("adapters.zig", string.format("Command args: %s", vim.inspect(args)))
-
   local bin = M.get_bin(params.bufnr)
-  logger.debug_context("adapters.zig", string.format("Binary: %s", bin))
-
   local env = adapter_args.merge_env(M.options, params.bufnr)
 
-  local job = Job:new({
-    command = bin,
+  return adapter_args.run_job({
+    adapter_name = "adapters.zig",
+    bin = bin,
     args = args,
     env = env,
     cwd = params.cwd,
-    on_stdout = function(_, data)
-      send({ type = "stdout", raw = data, output = data })
-    end,
-    on_stderr = function(_, data)
-      -- Zig sends ALL output to stderr, including test results
-      -- But we treat it as stdout for proper color rendering
-      send({ type = "stdout", raw = data, output = data })
-    end,
-    on_exit = function(_, return_val)
-      logger.debug_context("adapters.zig", string.format("Job exited with code: %d", return_val))
-      send({ type = "exit", code = return_val })
-    end,
+    send = send,
   })
-  job:start()
-
-  ---@type integer
-  ---@diagnostic disable-next-line: assign-type-mismatch
-  local pid = job.pid
-  logger.debug_context("adapters.zig", string.format("Job started with PID: %d", pid))
-
-  return pid
 end
 
 M.title = function(params)
@@ -515,7 +503,6 @@ end
 ---@param params RunParams
 ---@return table?
 M.build_dap_config = function(bufnr, params)
-  local additional_args = adapter_args.merge_additional_args(M.options, bufnr, params.opts)
   local env = adapter_args.merge_env(M.options, bufnr)
 
   -- For Zig, we need to use the LLDB adapter
