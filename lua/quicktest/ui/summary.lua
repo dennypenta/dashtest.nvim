@@ -359,11 +359,16 @@ return function(opts)
 
     -- Filter display list based on show_only_failed (only affects displayed tests)
     test_list = {}
+    logger.debug_context("ui.summary", string.format("show_only_failed: %s", tostring(show_only_failed)))
     for _, test in ipairs(all_tests) do
       if not show_only_failed or test.status == "failed" then
         table.insert(test_list, test)
+      else
+        logger.debug_context("ui.summary", string.format("Filtering out test: %s [%s]", test.name, test.status))
       end
     end
+
+    logger.debug_context("ui.summary", string.format("Filtered test_list count: %d, all_tests: %d", #test_list, #all_tests))
 
     local lines = {
       string.format(
@@ -376,6 +381,9 @@ return function(opts)
       "",
       show_only_failed and "Failed Tests:" or "Tests:",
     }
+
+    logger.debug_context("ui.summary", string.format("Summary counts - total:%d passed:%d failed:%d",
+      summary_counts.total, summary_counts.passed, summary_counts.failed))
 
     -- Add test entries (using filtered test_list)
     for _, test in ipairs(test_list) do
@@ -430,7 +438,14 @@ return function(opts)
 
   -- Public API
   function M.is_open()
-    return current_buffer and api.nvim_buf_is_valid(current_buffer) and is_buf_visible(current_buffer)
+    local is_open = current_buffer and api.nvim_buf_is_valid(current_buffer) and is_buf_visible(current_buffer)
+    local logger = require("quicktest.logger")
+    logger.debug_context("ui.summary", string.format("is_open check: current_buffer=%s, valid=%s, visible=%s, result=%s",
+      tostring(current_buffer),
+      current_buffer and tostring(api.nvim_buf_is_valid(current_buffer)) or "n/a",
+      current_buffer and tostring(is_buf_visible(current_buffer)) or "n/a",
+      tostring(is_open)))
+    return is_open
   end
 
   function M.open()
@@ -493,7 +508,16 @@ return function(opts)
     show_only_failed = M.config.only_failed or false
 
     storage_subscription = function(event_type, data)
+      local logger = require("quicktest.logger")
+      logger.debug_context("ui.summary", string.format("Event received: %s, is_open: %s", event_type, tostring(M.is_open())))
+
+      if not M.is_open() then
+        logger.debug_context("ui.summary", "Summary not open, skipping update")
+        return -- Only update if open
+      end
+
       if event_type == "run_started" then
+        logger.debug_context("ui.summary", "Handling run_started, clearing test_list")
         test_list = {}
         if M.is_open() then
           update_display()
@@ -502,11 +526,15 @@ return function(opts)
         if M.is_open() then
           update_display()
         end
+        logger.debug_context("ui.summary", string.format("Handling test_started: %s", data and data.name or "unknown"))
       elseif event_type == "test_finished" then
         if M.is_open() then
           update_display()
         end
         -- Ignore test_output events to avoid showing status lines in summary
+        logger.debug_context("ui.summary", string.format("Handling test_finished: %s [%s]", data and data.name or "unknown", data and data.status or "unknown"))
+      elseif event_type == "test_output" then
+        logger.debug_context("ui.summary", "Handling test_output")
       end
     end
 

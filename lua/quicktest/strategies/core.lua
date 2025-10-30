@@ -42,4 +42,49 @@ M.create_output_state = function()
   }
 end
 
+--- Creates an immediate event handler for adapter.handle_output()
+--- This handler processes test events immediately instead of queuing them through
+--- an async channel, ensuring real-time updates to storage and UI components.
+---
+--- @param adapter QuicktestAdapter The adapter that may have find_test_location method
+--- @param params RunParams The run parameters including bufnr and other context
+--- @return fun(event: CmdData) Handler function that processes events immediately
+M.create_adapter_event_handler = function(adapter, params)
+  local storage = require("quicktest.storage")
+  local logger = require("quicktest.logger")
+
+  return function(event)
+    if event.type == "test_started" then
+      logger.debug_context("strategies", string.format("Event: test_started [%s]", event.test_name))
+      local location = event.location or ""
+      if location == "" and adapter.find_test_location then
+        location = adapter.find_test_location(event.test_name, params) or ""
+      end
+      storage.test_started(event.test_name, location)
+    elseif event.type == "test_result" then
+      logger.debug_context(
+        "strategies",
+        string.format("Event: test_result [%s] status=%s", event.test_name, event.status)
+      )
+      local location = event.location or ""
+      if location == "" and adapter.find_test_location then
+        location = adapter.find_test_location(event.test_name, params) or ""
+      end
+      storage.test_finished(event.test_name, event.status, nil, location)
+    elseif event.type == "assert_failure" then
+      logger.debug_context(
+        "strategies",
+        string.format("Event: assert_failure [%s] at %s:%d", event.test_name, event.full_path, event.line)
+      )
+      storage.assert_failure(event.test_name, event.full_path, event.line, event.message or "")
+    elseif event.type == "assert_error" then
+      logger.debug_context("strategies", string.format("Event: assert_error [%s]", event.test_name))
+      storage.assert_error(event.test_name, event.message)
+    elseif event.type == "assert_message" then
+      logger.debug_context("strategies", string.format("Event: assert_message [%s]", event.test_name))
+      storage.assert_message(event.test_name, event.message)
+    end
+  end
+end
+
 return M

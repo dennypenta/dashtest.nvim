@@ -136,11 +136,13 @@ M.run = function(adapter, params, config, opts)
         storage.test_output("stdout", result.output)
         -- Let adapter parse output line by line if it has handle_output
         if adapter.handle_output and params.output_state then
+          -- Use immediate event handler from core to avoid async channel queueing delay
+          local immediate_handler = core.create_adapter_event_handler(adapter, params)
           local lines = vim.split(result.output, "\n", { plain = true })
           for _, line in ipairs(lines) do
             if line ~= "" then
-              -- Adapter will emit events via sender, which will be processed by handlers below
-              adapter.handle_output(line, sender.send, params)
+              -- Process events immediately instead of queuing through channel
+              adapter.handle_output(line, immediate_handler, params)
             end
           end
         end

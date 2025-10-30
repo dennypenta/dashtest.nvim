@@ -52,22 +52,6 @@ M.run = function(adapter, params, config, opts)
 
   local line_buffer = ""
 
-  -- Create wrapper send function that converts adapter events to storage calls
-  local function adapter_event_to_storage(event)
-    logger.debug_context("strategies.dap", string.format("Adapter event: %s", event.type))
-    if event.type == "test_started" then
-      storage.test_started(event.test_name, event.location or "")
-    elseif event.type == "test_result" then
-      storage.test_finished(event.test_name, event.status, nil, event.location)
-    elseif event.type == "assert_failure" then
-      storage.assert_failure(event.test_name, event.full_path, event.line, event.message or "")
-    elseif event.type == "assert_error" then
-      storage.assert_error(event.test_name, event.message)
-    elseif event.type == "assert_message" then
-      storage.assert_message(event.test_name, event.message)
-    end
-  end
-
   local function write_output(data)
     logger.debug_context("strategies.dap", string.format("write_output called with %d bytes", #data))
     table.insert(output_data, data)
@@ -76,6 +60,8 @@ M.run = function(adapter, params, config, opts)
 
     -- Use adapter's handle_output if available, otherwise skip parsing
     if adapter.handle_output then
+      -- Use immediate event handler from core to process events in real-time
+      local immediate_handler = core.create_adapter_event_handler(adapter, params)
       line_buffer = line_buffer .. data
       local lines = vim.split(line_buffer, "\n", { plain = true })
       -- If data doesn't end with newline, last element is incomplete - keep it in buffer
@@ -88,7 +74,7 @@ M.run = function(adapter, params, config, opts)
       for _, line in ipairs(lines) do
         if line ~= "" then
           logger.debug_context("strategies.dap", string.format("Passing line to adapter: %s", line))
-          adapter.handle_output(line, adapter_event_to_storage, params)
+          adapter.handle_output(line, immediate_handler, params)
         end
       end
     end
