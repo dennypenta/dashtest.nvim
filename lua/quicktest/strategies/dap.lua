@@ -17,13 +17,18 @@ end
 ---@param opts AdapterRunOpts
 ---@return QuicktestStrategyResult
 M.run = function(adapter, params, config, opts)
-
-  logger.debug_context("strategies.dap", string.format("DAP strategy run started with params: %s", vim.inspect({
-    adapter_name = adapter.name,
-    params = params,
-    opts = opts,
-    has_build_dap_config = adapter.build_dap_config ~= nil,
-  })))
+  logger.debug_context(
+    "strategies.dap",
+    string.format(
+      "DAP strategy run started with params: %s",
+      vim.inspect({
+        adapter_name = adapter.name,
+        params = params,
+        opts = opts,
+        has_build_dap_config = adapter.build_dap_config ~= nil,
+      })
+    )
+  )
 
   if not adapter.build_dap_config then
     logger.debug_context("strategies.dap", "Adapter missing build_dap_config method")
@@ -62,6 +67,7 @@ M.run = function(adapter, params, config, opts)
   end
 
   local function write_output(data)
+    logger.debug_context("strategies.dap", string.format("write_output called with %d bytes", #data))
     table.insert(output_data, data)
     -- Also emit to storage
     storage.test_output("stdout", data)
@@ -71,6 +77,7 @@ M.run = function(adapter, params, config, opts)
       local lines = vim.split(data, "\n", { plain = true })
       for _, line in ipairs(lines) do
         if line ~= "" then
+          logger.debug_context("strategies.dap", string.format("Passing line to adapter: %s", line))
           adapter.handle_output(line, adapter_event_to_storage, params)
         end
       end
@@ -79,7 +86,7 @@ M.run = function(adapter, params, config, opts)
     if output_fd then
       local write_err, _ = vim.uv.fs_write(output_fd, data)
       if write_err then
-        vim.notify("Failed to write DAP output: " .. write_err, vim.log.levels.WARN)
+        logger.debug_context("strategies.dap", "Failed to write output: " .. write_err)
       end
     end
   end
