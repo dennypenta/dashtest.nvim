@@ -86,25 +86,20 @@ end
 ---@param callback function? Optional callback to run after navigation
 ---@return boolean success
 function M.jump_to_test(test, callback)
-  logger.trace_enter("navigation", "jump_to_test", { test_name = test and test.name or "nil" })
-
   if not test then
     logger.debug_context("navigation", "No test provided")
-    logger.trace_exit("navigation", "jump_to_test", false)
     return false
   end
 
   local location = discover_test_location(test)
   if not location then
     logger.debug_context("navigation", "No location discovered for test")
-    logger.trace_exit("navigation", "jump_to_test", false)
     return false
   end
 
   local parts = vim.split(location, ":")
   if #parts < 1 then
     logger.debug_context("navigation", "Invalid location format")
-    logger.trace_exit("navigation", "jump_to_test", false)
     return false
   end
 
@@ -166,12 +161,10 @@ function M.jump_to_test(test, callback)
       callback()
     end
 
-    logger.trace_exit("navigation", "jump_to_test", true)
     return true
   end
 
   logger.debug_context("navigation", "No valid target window")
-  logger.trace_exit("navigation", "jump_to_test", false)
   return false
 end
 
