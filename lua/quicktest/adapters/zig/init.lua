@@ -207,7 +207,7 @@ end
 --- @param full_name string
 --- @param state table
 --- @return integer?, table?
-function M.find_test_in_state(state, test_name, full_name)
+local function find_test_in_state(state, test_name, full_name)
   for i, tr in ipairs(state.tests_progress) do
     if tr.name == test_name or tr.name == full_name then
       return i, tr
@@ -272,7 +272,7 @@ M.handle_output = function(line, send, params)
     logger.debug_context("adapters.zig.output", string.format("Detected passing test: %s", ok_full_test_name))
 
     local test_name = extract_test_name(ok_full_test_name)
-    local test_index, test_result = core.find_test_in_state(test_name, ok_full_test_name, params.output_state)
+    local test_index, test_result = find_test_in_state(params.output_state, test_name, ok_full_test_name)
 
     -- Use the actual name from state if found
     if test_result then
@@ -321,7 +321,7 @@ M.handle_output = function(line, send, params)
     logger.debug_context("adapters.zig.output", string.format("Extracted test name: %s", test_name))
     logger.debug_context("adapters.zig.output", "Waiting for stack trace to get location")
 
-    local _, test_result = core.find_test_in_state(test_name, full_test_name, params.output_state)
+    local _, test_result = find_test_in_state(params.output_state, test_name, full_test_name)
 
     -- Only mark test as failed if we haven't already
     if not test_result or test_result.status ~= "failed" then
@@ -354,7 +354,7 @@ M.handle_output = function(line, send, params)
   local skip_test_name = clean_line:match("^%d+/%d+ (.-)%.%.%.SKIP%s*$")
   if skip_test_name then
     local test_name = extract_test_name(skip_test_name)
-    local test_index, test_result = core.find_test_in_state(params.output_state, test_name, skip_test_name)
+    local test_index, test_result = find_test_in_state(params.output_state, test_name, skip_test_name)
 
     -- Use the actual name from state if found
     if test_result then
